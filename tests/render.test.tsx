@@ -12,13 +12,16 @@ const PANE = {
   props: { title: 'Bar styles', isFocused: false } as never,
 } as const
 
-const BAND = {
+const HINT = {
   plugin: 'claudepeeker',
   surface: 'terminal',
-  component: 'AbovePrompt',
-  props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 155 } as never,
+  component: 'PromptHint',
+  props: { isDraft: false, isWorking: false, hint: '? for shortcuts' } as never,
   viewport: { columns: 160, rows: 40 } as never,
 } as const
+
+const LINE =
+  '[Opus 5.5 ·high] · claudepeeker · ctx (1M) ▰▱▱▱▱ 12% · 5h (2h59m) █░░░░ 6% [+34%] · wk (6d18h) █░░░░ 1%'
 
 function world(on: On) {
   mock.clock(on, { now: NOW })
@@ -38,6 +41,11 @@ function world(on: On) {
   on('settings.read', () => ({
     value: { effortLevel: 'medium', modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } },
   }))
+  // The engine's own hint line, which the mod keeps above the status line.
+  on('ui.render', ({ ui }, e) => {
+    const { Text } = ui.resolve(e)
+    return <Text>? for shortcuts</Text>
+  })
 }
 
 type Node = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
@@ -55,36 +63,22 @@ function columnBoxes(node: unknown): number {
   return own + children.reduce<number>((n, child) => n + columnBoxes(child), 0)
 }
 
-test('the band draws the old status line, indented as it was, in one flow', async ($, on) => {
+test('the status line draws under the hint line, aligned with it, in one flow', async ($, on) => {
   world(on)
-  const ui = await $.ui.mount(BAND)
+  const ui = await $.ui.mount(HINT)
   const drawn = await ui.drawn()
-  expect(text(drawn)).toBe(
-    '[Opus 5.5 ·high] · claudepeeker · ctx (1M) ▰▱▱▱▱ 12% · 5h (2h59m) █░░░░ 6% [+34%] · wk (6d18h) █░░░░ 1%',
-  )
-  expect(JSON.stringify(drawn)).toContain('"paddingLeft":2')
-  // In the flow: a negative margin empties the band, an overlay outside it is clipped.
-  expect(JSON.stringify(drawn)).not.toContain('marginBottom')
-  expect(JSON.stringify(drawn)).not.toContain('absolute')
+  expect(text(drawn)).toBe(`? for shortcuts${LINE}`)
+  // The hint slot is already indented: any padding pushes the line right of the hint.
+  expect(JSON.stringify(drawn)).not.toContain('paddingLeft')
   // No fragment boxes: one lays out as a column and stacks the line's pieces.
   expect(columnBoxes(drawn)).toBe(0)
   // Plain text is dim, as the old status line draws it; colored text is not.
   expect(JSON.stringify(await ui.find({ type: 'Text', text: 'claudepeeker' }))).toContain('dimColor')
 })
 
-test('a survey takes the band back', async ($, on) => {
-  world(on)
-  on('ui.render', ({ ui }, e) => {
-    const { Text } = ui.resolve(e)
-    return <Text>survey</Text>
-  })
-  const ui = await $.ui.mount({ ...BAND, props: { hasSurvey: true, isWorking: false, maxRows: 10, bodyColumns: 155 } as never })
-  expect(text(await ui.drawn())).toBe('survey')
-})
-
 test('a click on a reset time cycles it, each window on its own', async ($, on) => {
   world(on)
-  const ui = await $.ui.mount(BAND)
+  const ui = await $.ui.mount(HINT)
   await ui.press({ key: 'reset-five' })
   expect((await ui.find({ key: 'reset-five' }))?.text).toBe('(15:59)')
   expect((await ui.find({ key: 'reset-week' }))?.text).toBe('(6d18h)')
@@ -106,7 +100,7 @@ test('the panel restyles one bar and leaves the others', async ($, on) => {
   await pane.press({ key: 'style-five-prev' })
   await pane.press({ key: 'style-five-next' })
   await pane.press({ key: 'time-five' })
-  const line = text(await (await $.ui.mount(BAND)).drawn())
+  const line = text(await (await $.ui.mount(HINT)).drawn())
   expect(line).toContain('wk (6d18h) ●○○○○○○○ 1%')
   expect(line).toContain('5h (15:59) █░░░░ 6%')
   expect(line).toContain('ctx (1M) ▰▱▱▱▱ 12%')

@@ -5,16 +5,16 @@
 A mod for the Claude Code CLI that replaces a `statusLine` script with a status line the mod draws itself. It shows the model and effort, the project and git branch, the context window, and the 5-hour and weekly rate limits. You can click the reset times and restyle each bar.
 
 ```
-[Opus 5.5 ·high] · claudepeeker/main* · ctx (1M) ▰▰▱▱▱ 29% · 5h (2h13m) █░░░░ 10% [+45%] · wk (6d17h) █░░░░ 1%
 ╭──────────────────────────────────────────────────────────────────────────────────────╮
 │ >                                                                                    │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯
-  ⏵⏵ auto mode on (shift+tab to cycle)
+  ⏵⏵ accept edits on (shift+tab to cycle)
+  [Opus 5.5 ·high] · claudepeeker/main* · ctx (1M) ▰▰▱▱▱ 29% · 5h (2h13m) █░░░░ 10% [+45%] · wk (6d17h) █░░░░ 1%
 ```
 
 ## Features
 
-- **The status line, on the row above the prompt:** `[model ·effort] · project/branch · ctx · 5h · wk`, in the colors of the classic ANSI status line.
+- **The status line, under the prompt's hint line:** `[model ·effort] · project/branch · ctx · 5h · wk`, in the colors of the classic ANSI status line.
 - **Git state:** a red `*` after the branch for uncommitted changes, a yellow one for commits not yet pushed.
 - **Context window:** the window size and how full it is.
 - **Rate limits:** the 5-hour and weekly windows, each with a bar, the time until reset and a pace delta. The delta reads `[+n%]` when you're under an even burn rate and `[-n%]` when you're over it, and is hidden under 5 points.
@@ -75,10 +75,7 @@ Reset  5h 13:50  wk 17/10 05:00
 
 ## Limitations
 
-- **Above the prompt, not below it.** The mod API has no hook into the row a `statusLine` script draws in. The row under the prompt is a narrow slot beside the mode pill. The band above the prompt is the one full-width row a mod can draw.
-- **A blank row between the line and the prompt.** It's Claude Code's own spacing around the band, and a mod can't remove it.
-- **The band's `[-]` mark** sits at the right end of the line. It's Claude Code's, and it collapses the band.
-- **Surveys:** when Claude Code shows a survey in the band, the line steps aside until it's answered.
+- **Under the hint line.** The mod API has no hook into the row a `statusLine` script draws in. The mod keeps Claude Code's hint line (`? for shortcuts`, the mode pill) as it is and draws the status line on the row beneath it.
 - **Effort set only for the session** (not saved to settings) isn't shown. `/effort` saves to settings, so it is.
 
 ## Development
@@ -90,7 +87,7 @@ claude plugin test .
 
 | Path | Contents |
 |---|---|
-| `hooks/register.tsx` | the mod: the band, the `/peeker` panel and command, git and usage reading |
+| `hooks/register.tsx` | the mod: the line under the hint, the `/peeker` panel and command, git and usage reading |
 | `hooks/line.ts` | the status line as colored segments |
 | `hooks/format.ts` | figures: pace delta, reset times, model names, token counts |
 | `hooks/styles.ts` | the bar styles and the stored preferences |

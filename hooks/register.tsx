@@ -12,8 +12,6 @@ const PANE = 'peeker-bars'
 const STORE_KEY = 'prefs'
 const TICK_MS = 30_000
 const GIT_EVERY_MS = 10_000
-/** The old status line starts this many cells in from the prompt's left edge. */
-const INDENT = 2
 
 const prefs = atom({ plugin: 'claudepeeker', key: 'prefs' } as const, DEFAULT_PREFS)
 const git = atom({ plugin: 'claudepeeker', key: 'git' } as const, null)
@@ -154,7 +152,7 @@ function drawLine($: EngineInterface, ui: Ui, groups: Segment[][]) {
   }
 
   return (
-    <Box flexDirection="row" flexWrap="wrap" paddingLeft={INDENT}>
+    <Box flexDirection="row" flexWrap="wrap">
       {groups.map(group)}
     </Box>
   )
@@ -203,14 +201,18 @@ export const register: Register = on => {
     return { text: 'Opened the bar styles panel.' }
   })
 
-  // The band above the prompt: the one full-width row a mod draws near the prompt
-  // (the hint row under it is a slot beside the mode pill). It yields to a survey.
-  // The blank row between it and the prompt is the engine's: a negative margin
-  // empties the band and an overlay below it is clipped, so neither is used.
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e)
+  // The hint line under the prompt, kept as the engine draws it (its pills stay
+  // live), with the status line on the row beneath, where a statusLine script draws.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    const [drawn, data] = await Promise.all([next(e), lineData($)])
+    const ui = $.ui.resolve(e)
 
-    return drawLine($, $.ui.resolve(e), lineGroups(await lineData($)))
+    return (
+      <ui.Box flexDirection="column">
+        {drawn}
+        {drawLine($, ui, lineGroups(data))}
+      </ui.Box>
+    )
   })
 
   // The panel: per bar, its live preview and ‹ › arrows stepping its style and width.
