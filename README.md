@@ -1,6 +1,6 @@
 # Claude-Peeker
 
-![version](https://img.shields.io/badge/version-0.2.0-blue)
+![version](https://img.shields.io/badge/version-0.2.1-blue)
 
 A mod for the Claude Code CLI that replaces a `statusLine` script with a status line the mod draws itself. It shows the model and effort, the project and git branch, the context window, and the 5-hour and weekly rate limits. You can click the reset times and restyle each bar.
 
@@ -75,7 +75,7 @@ Reset  5h 13:50  wk 17/10 05:00
 
 ## Limitations
 
-- **Under the hint line.** The mod API has no hook into the row a `statusLine` script draws in. The mod keeps Claude Code's hint line (`? for shortcuts`, the mode pill) as it is and draws the status line on the row beneath it.
+- **Under the hint line.** The mod API has no hook into the row a `statusLine` script draws in. The mod keeps Claude Code's hint line (`? for shortcuts`, the mode pill) as it is and draws the status line on the row beneath it. Rows another mod adds under the hint line go below the status line.
 - **Effort set only for the session** (not saved to settings) isn't shown. `/effort` saves to settings, so it is.
 
 ## Development
