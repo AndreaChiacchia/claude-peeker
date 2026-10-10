@@ -23,7 +23,8 @@ const HINT = {
 const LINE =
   '[Opus 5.5 ·high] · claudepeeker · ctx (1M) ▰▱▱▱▱ 12% · 5h (2h59m) █░░░░ 6% [+34%] · wk (6d18h) █░░░░ 1%'
 
-function world(on: On) {
+/** `stacked`: another mod beneath has put rows of its own under the hint. */
+function world(on: On, stacked: string[] = []) {
   mock.clock(on, { now: NOW })
   mock.store(on)
   on('session.usage', () => ({
@@ -43,8 +44,16 @@ function world(on: On) {
   }))
   // The engine's own hint line, which the mod keeps above the status line.
   on('ui.render', ({ ui }, e) => {
-    const { Text } = ui.resolve(e)
-    return <Text>? for shortcuts</Text>
+    const { Box, Text } = ui.resolve(e)
+    if (stacked.length === 0) return <Text>? for shortcuts</Text>
+    return (
+      <Box flexDirection="column">
+        <Text>? for shortcuts</Text>
+        {stacked.map(row => (
+          <Text>{row}</Text>
+        ))}
+      </Box>
+    )
   })
 }
 
@@ -74,6 +83,12 @@ test('the status line draws under the hint line, aligned with it, in one flow', 
   expect(columnBoxes(drawn)).toBe(0)
   // Plain text is dim, as the old status line draws it; colored text is not.
   expect(JSON.stringify(await ui.find({ type: 'Text', text: 'claudepeeker' }))).toContain('dimColor')
+})
+
+test("the status line stays right under the hint, before another mod's rows", async ($, on) => {
+  world(on, ['subagents', 'general-purpose'])
+  const drawn = await (await $.ui.mount(HINT)).drawn()
+  expect(text(drawn)).toBe(`? for shortcuts${LINE}subagentsgeneral-purpose`)
 })
 
 test('a click on a reset time cycles it, each window on its own', async ($, on) => {

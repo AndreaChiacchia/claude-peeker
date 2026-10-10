@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Elements, EngineInterface, Register } from 'claude-code'
+import type { Elements, EngineInterface, Register, RenderElement, RenderNode } from 'claude-code'
 
 import type { BarId, GitInfo, Prefs } from '../types'
 import { nextTimeMode, resetLabel, tone, windowFigures } from './format'
@@ -97,6 +97,15 @@ async function readGit($: EngineInterface): Promise<GitInfo | null> {
 
 function basename(path: string): string {
   return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? ''
+}
+
+/** The rows of a column another mod stacked under the hint, the hint first; else the hint alone. */
+function stacked(drawn: RenderElement): RenderNode[] {
+  if (drawn.type === 'Box' && drawn.props?.flexDirection === 'column' && drawn.children?.length) {
+    return [...drawn.children]
+  }
+
+  return [drawn]
 }
 
 function partColor(part: BarPart, percent: number): string {
@@ -203,14 +212,18 @@ export const register: Register = on => {
 
   // The hint line under the prompt, kept as the engine draws it (its pills stay
   // live), with the status line on the row beneath, where a statusLine script draws.
+  // Rows another mod stacked under the hint go after the line, whichever of the two
+  // sits above the other.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const [drawn, data] = await Promise.all([next(e), lineData($)])
     const ui = $.ui.resolve(e)
+    const [hint, ...below] = stacked(drawn)
 
     return (
       <ui.Box flexDirection="column">
-        {drawn}
+        {hint}
         {drawLine($, ui, lineGroups(data))}
+        {below}
       </ui.Box>
     )
   })
