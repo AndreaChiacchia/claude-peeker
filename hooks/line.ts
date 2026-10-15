@@ -19,6 +19,8 @@ export type Segment = {
   bold?: boolean
   /** The reset time a press on this segment cycles. */
   press?: 'five' | 'week'
+  /** The bar this segment draws; such segments are one animated piece. */
+  bar?: BarId
 }
 
 export type LineData = {
@@ -38,13 +40,14 @@ export type LineData = {
 
 function bar(prefs: Prefs, id: BarId, percent: number): Segment[] {
   const col = TONES[tone(percent)]
-  const cells = drawBar(prefs.bars[id], percent).map(part => ({
+  const cells: Segment[] = drawBar(prefs.bars[id], percent).map(part => ({
     text: part.text,
     color: part.kind === 'fill' ? col : GRAY,
+    bar: id,
   }))
-  const figure = { text: `${percent}%`, color: col }
+  const figure: Segment = { text: `${percent}%`, color: col, bar: id }
 
-  return styleOf(prefs.bars[id].style).id === 'none' ? [figure] : [...cells, { text: ' ' }, figure]
+  return styleOf(prefs.bars[id].style).id === 'none' ? [figure] : [...cells, { text: ' ', bar: id }, figure]
 }
 
 function windowGroup(d: LineData, id: 'five' | 'week', label: string, f: WindowFigures): Segment[] {

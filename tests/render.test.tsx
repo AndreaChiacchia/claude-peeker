@@ -1,5 +1,9 @@
-import type { On } from 'claude-code'
+import type { On, TurnStepChunk, TurnStepResult } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
+
+import { decodeCells } from '../hooks/cells'
+import type { Cell } from '../hooks/cells'
 
 const NOW = Date.parse('2026-10-10T11:00:00Z')
 const HOUR = 3600_000
@@ -16,6 +20,7 @@ const HINT = {
   plugin: 'claudepeeker',
   surface: 'terminal',
   component: 'PromptHint',
+  requestId: 'hint',
   props: { isDraft: false, isWorking: false, hint: '? for shortcuts' } as never,
   viewport: { columns: 160, rows: 40 } as never,
 } as const
@@ -23,17 +28,38 @@ const HINT = {
 const LINE =
   '[Opus 5.5 ·high] · claudepeeker · ctx (1M) ▰▱▱▱▱ 12% · 5h (2h59m) █░░░░ 6% [+34%] · wk (6d18h) █░░░░ 1%'
 
-/** `stacked`: another mod beneath has put rows of its own under the hint. */
+/**
+ * `stacked`: another mod beneath has put rows of its own under the hint.
+ * The figures the tests move live in `state`; the blits the mod sends are recorded in `blits`.
+ */
 function world(on: On, stacked: string[] = []) {
-  mock.clock(on, { now: NOW })
-  mock.store(on)
+  const state = {
+    ctx: 12,
+    five: { percentUsed: 6, resetsAt: new Date(NOW + 2 * HOUR + 59 * 60_000).toISOString() },
+    week: { percentUsed: 1, resetsAt: new Date(NOW + 6 * 24 * HOUR + 18 * HOUR).toISOString() },
+    blitAnswer: {} as { deny?: string },
+  }
+  const blits: { requestId: string; key: string; cells?: string }[] = []
+  const clock = mock.clock(on, { now: NOW })
+  // The mod's own key-value store, in memory; the test reads it back through `store`.
+  const store = new Map<string, unknown>()
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, JSON.parse(JSON.stringify(e.value)))
+    return { value: undefined }
+  })
+  on('store.delete', (_$, e) => {
+    store.delete(e.key)
+    return { value: undefined }
+  })
+  on('store.keys', () => ({ value: [...store.keys()] }))
   on('session.usage', () => ({
     value: {
       startedAt: NOW - HOUR,
-      context: { tokens: 120_000, window: 1_000_000, percent: 12 },
+      context: { tokens: state.ctx * 10_000, window: 1_000_000, percent: state.ctx },
       rateLimits: [
-        { kind: 'five_hour', percentUsed: 6, resetsAt: new Date(NOW + 2 * HOUR + 59 * 60_000).toISOString() },
-        { kind: 'seven_day', percentUsed: 1, resetsAt: new Date(NOW + 6 * 24 * HOUR + 18 * HOUR).toISOString() },
+        { kind: 'five_hour', ...state.five },
+        { kind: 'seven_day', ...state.week },
       ],
     },
   }))
@@ -42,6 +68,28 @@ function world(on: On, stacked: string[] = []) {
   on('settings.read', () => ({
     value: { effortLevel: 'medium', modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } },
   }))
+  on('ui.blit', (_$, e) => {
+    blits.push({ requestId: e.requestId, key: e.key, cells: (e as unknown as { cells?: string }).cells })
+    return { value: state.blitAnswer }
+  })
+  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('turn.step', async function* (_$, e): AsyncGenerator<TurnStepChunk, TurnStepResult> {
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: '',
+      toolUses: [],
+      stopReason: 'end_turn' as const,
+      usage: {
+        model: 'claude-opus-5-5',
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+    }
+  })
   // The engine's own hint line, which the mod keeps above the status line.
   on('ui.render', ({ ui }, e) => {
     const { Box, Text } = ui.resolve(e)
@@ -55,15 +103,33 @@ function world(on: On, stacked: string[] = []) {
       </Box>
     )
   })
+
+  return { state, blits, clock, store }
 }
+
+type World = ReturnType<typeof world>
 
 type Node = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
 
+const cellText = (cells: Cell[]): string => cells.map(c => String.fromCodePoint(c.cp)).join('')
+
+/** The drawing as text; a Raster contributes its decoded cells, untrimmed. */
 function text(node: unknown): string {
   if (typeof node === 'string') return node
   if (node === null || typeof node !== 'object') return ''
-  return ((node as Node).children ?? []).map(text).join('')
+  const one = node as Node
+  if (one.type === 'Raster') return cellText(decodeCells(String(one.props?.cells ?? '')))
+  return (one.children ?? []).map(text).join('')
 }
+
+function walk(node: unknown, out: Node[] = []): Node[] {
+  if (node === null || typeof node !== 'object') return out
+  out.push(node as Node)
+  for (const child of (node as Node).children ?? []) walk(child, out)
+  return out
+}
+
+const rasters = (node: unknown) => walk(node).filter(n => n.type === 'Raster')
 
 function columnBoxes(node: unknown): number {
   if (node === null || typeof node !== 'object') return 0
@@ -71,6 +137,25 @@ function columnBoxes(node: unknown): number {
   const own = type === 'Box' && props?.flexDirection !== 'row' && props?.flexDirection !== 'column' ? 1 : 0
   return own + children.reduce<number>((n, child) => n + columnBoxes(child), 0)
 }
+
+/** The engine measures the figures `state` holds now. */
+async function measure($: Engine, w: World, changed: string[]) {
+  await $.session.measure({
+    context: { tokens: w.state.ctx * 10_000, window: 1_000_000, percent: w.state.ctx },
+    rateLimits: [
+      { kind: 'five_hour', ...w.state.five },
+      { kind: 'seven_day', ...w.state.week },
+    ],
+    changed,
+  } as never)
+}
+
+/** `/peeker <args>`, as the composer runs it. */
+const command = ($: Engine, args: string) =>
+  $.command.run({ command: 'peeker', args, origin: { kind: 'composer' } } as never) as Promise<{ text: string }>
+
+/** What each blit painted, as text. */
+const blitTexts = (w: World): string[] => w.blits.map(b => cellText(decodeCells(b.cells ?? '')))
 
 test('the status line draws under the hint line, aligned with it, in one flow', async ($, on) => {
   world(on)
@@ -83,6 +168,8 @@ test('the status line draws under the hint line, aligned with it, in one flow', 
   expect(columnBoxes(drawn)).toBe(0)
   // Plain text is dim, as the old status line draws it; colored text is not.
   expect(JSON.stringify(await ui.find({ type: 'Text', text: 'claudepeeker' }))).toContain('dimColor')
+  // The three bars are Rasters, each under its own key.
+  expect(rasters(drawn).map(n => n.props?.key ?? (n as { key?: unknown }).key)).toEqual(['peeker-ctx', 'peeker-five', 'peeker-week'])
 })
 
 test("the status line stays right under the hint, before another mod's rows", async ($, on) => {
@@ -119,4 +206,213 @@ test('the panel restyles one bar and leaves the others', async ($, on) => {
   expect(line).toContain('wk (6d18h) ●○○○○○○○ 1%')
   expect(line).toContain('5h (15:59) █░░░░ 6%')
   expect(line).toContain('ctx (1M) ▰▱▱▱▱ 12%')
+})
+
+test('the first draw is silent', async ($, on) => {
+  const w = world(on)
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  await w.clock.advance(1000)
+  expect(w.blits.length).toBe(0)
+})
+
+test('a rise animates and settles', async ($, on) => {
+  const w = world(on)
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  w.state.ctx = 52
+  await measure($, w, ['context'])
+  await ui.drawn()
+  await w.clock.advance(100)
+  expect(w.blits.length).toBeGreaterThan(0)
+  expect(w.blits.every(b => b.requestId === 'hint' && b.key === 'peeker-ctx')).toBe(true)
+
+  await w.clock.advance(3000)
+  const settled = w.blits.length
+  await w.clock.advance(1000)
+  expect(w.blits.length).toBe(settled)
+
+  const last = decodeCells(w.blits.at(-1)?.cells ?? '')
+  expect(cellText(last)).toBe('▰▰▰▱▱ 52%')
+  expect(last.filter(c => c.cp === 0x25b0).every(c => c.fg === 0xffd700)).toBe(true)
+  expect(w.blits.slice(0, -1).some(b => b.cells !== w.blits.at(-1)?.cells)).toBe(true)
+})
+
+test('a compaction drains the ctx bar and shows its badge for a moment', async ($, on) => {
+  const w = world(on)
+  w.state.ctx = 85
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  w.state.ctx = 23
+  await measure($, w, ['context'])
+  expect(text(await ui.drawn())).toContain('↻ −62%')
+
+  await w.clock.advance(3000)
+  const after = text(await ui.drawn())
+  expect(after).toContain('ctx (1M) ▰▱▱▱▱ 23%')
+  expect(after).not.toContain('↻')
+})
+
+test('a rate window that resets flashes fresh', async ($, on) => {
+  const w = world(on)
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  w.state.five = { percentUsed: 0, resetsAt: new Date(NOW + 5 * HOUR).toISOString() }
+  await measure($, w, ['rateLimits'])
+  expect(text(await ui.drawn())).toContain('✦ fresh')
+})
+
+test('Off draws today\'s line and moves nothing', async ($, on) => {
+  const w = world(on)
+  const pane = await $.ui.mount(PANE)
+  await pane.press({ key: 'motion-next' })
+  await pane.press({ key: 'motion-next' })
+  const ui = await $.ui.mount(HINT)
+  const drawn = await ui.drawn()
+  expect(rasters(drawn).length).toBe(0)
+  expect(text(drawn)).toBe(`? for shortcuts${LINE}`)
+
+  w.state.ctx = 52
+  await measure($, w, ['context'])
+  await ui.drawn()
+  await w.clock.advance(2000)
+  expect(w.blits.length).toBe(0)
+  expect((w.store.get('prefs') as { motion?: string } | undefined)?.motion).toBe('off')
+})
+
+test('the panel steps the motion: Lively, Subtle, Off', async ($, on) => {
+  world(on)
+  const pane = await $.ui.mount(PANE)
+  expect(text(await pane.drawn())).toContain('Motion Lively ')
+  expect((await pane.find({ key: 'motion-prev' }))?.text).toBe('‹')
+  expect((await pane.find({ key: 'motion-next' }))?.text).toBe('›')
+  await pane.press({ key: 'motion-next' })
+  expect(text(await pane.drawn())).toContain('Motion Subtle ')
+})
+
+test('a slot that refuses its first blits three times is drawn still', async ($, on) => {
+  const w = world(on)
+  w.state.blitAnswer = { deny: 'no such site' }
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  for (let i = 0; i < 3; i++) {
+    w.state.ctx += 5
+    await measure($, w, ['context'])
+    expect(rasters(await ui.drawn()).length).toBeGreaterThan(0)
+    await w.clock.advance(100)
+  }
+  const again = text(await ui.drawn())
+  expect(rasters(await ui.drawn()).length).toBe(0)
+  expect(again).toContain('ctx (1M)')
+  expect(again).toContain('27%')
+})
+
+test('the bars move after each response, before the turn ends', async ($, on) => {
+  const w = world(on)
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  w.state.ctx = 30
+  const stream = $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 1 } as never)
+  for await (const chunk of stream) void chunk
+  // The motion takes the new figure in a render; the response's redraw is that render.
+  await ui.drawn()
+  // The figure then rolls through the Raster blits, which the drawing itself does not show.
+  await w.clock.advance(2000)
+  const ctx = w.blits.filter(b => b.key === 'peeker-ctx')
+  expect(ctx.length).toBeGreaterThan(0)
+  expect(cellText(decodeCells(ctx.at(-1)?.cells ?? ''))).toContain('30%')
+})
+
+test('the demo plays every effect, then returns silently to real usage', async ($, on) => {
+  const w = world(on)
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  const started = await command($, 'demo')
+  expect(started.text.startsWith('Playing the motion demo')).toBe(true)
+
+  // The baseline row is taken silently.
+  expect(text(rasters(await ui.drawn())[0])).toBe('▰▱▱▱▱ 20%')
+  await w.clock.advance(1000)
+  expect(w.blits.length).toBe(0)
+
+  // Past 1500 ms the first small rise starts.
+  await w.clock.advance(1000)
+  await ui.drawn()
+  await w.clock.advance(300)
+  expect(w.blits.some(b => b.key === 'peeker-ctx')).toBe(true)
+
+  // Through the rest of the tour, drawing after each step as the row changes ask.
+  const drawings: string[] = []
+  for (let at = 2300; at < 18300; at += 500) {
+    await w.clock.advance(500)
+    drawings.push(text(await ui.drawn()))
+  }
+  const seen = (part: string) => drawings.some(d => d.includes(part)) || blitTexts(w).some(t => t.includes(part))
+  expect(seen('↻ −53%')).toBe(true)
+  expect(seen('✦ fresh') || seen('✧ fresh')).toBe(true)
+
+  // The demo is over at 20 s: the real figures are back, with no effect.
+  await w.clock.advance(2700)
+  const after = text(await ui.drawn())
+  expect(after).toContain('ctx (1M) ▰▱▱▱▱ 12%')
+  expect(after).toContain('█░░░░ 6% [+')
+  expect(after).toContain('█░░░░ 1%')
+  expect(after).not.toContain('↻')
+  expect(after).not.toContain('fresh')
+  const count = w.blits.length
+  await w.clock.advance(2000)
+  expect(w.blits.length).toBe(count)
+})
+
+test('under Off the demo still steps the figures, without effects', async ($, on) => {
+  const w = world(on)
+  const pane = await $.ui.mount(PANE)
+  await pane.press({ key: 'motion-next' })
+  await pane.press({ key: 'motion-next' })
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  const started = await command($, 'demo')
+  expect(started.text).toContain('Motion is Off')
+  await w.clock.advance(7000)
+  const drawn = await ui.drawn()
+  expect(text(drawn)).toContain('ctx (1M) ▰▰▰▱▱ 56%')
+  expect(rasters(drawn).length).toBe(0)
+  expect(w.blits.length).toBe(0)
+})
+
+test('demo stop brings the real figures back; a second one says no demo runs', async ($, on) => {
+  const w = world(on)
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  await command($, 'demo')
+  await w.clock.advance(7000)
+  const stopped = await command($, 'demo stop')
+  expect(stopped.text).toBe('Stopped the demo: the line shows your real usage again.')
+  const drawn = text(await ui.drawn())
+  expect(drawn).toContain('ctx (1M) ▰▱▱▱▱ 12%')
+  expect(drawn).toContain('█░░░░ 6%')
+  expect(drawn).toContain('█░░░░ 1%')
+  const count = w.blits.length
+  await w.clock.advance(1000)
+  expect(w.blits.length).toBe(count)
+  expect((await command($, 'demo stop')).text).toBe('No demo is running.')
+})
+
+test('a second demo restarts from the beginning', async ($, on) => {
+  const w = world(on)
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  await command($, 'demo')
+  await w.clock.advance(14000)
+  await command($, 'demo')
+  const drawn = await ui.drawn()
+  expect(text(rasters(drawn)[0])).toBe('▰▱▱▱▱ 20%')
+  const count = w.blits.filter(b => b.key === 'peeker-ctx').length
+  await w.clock.advance(1000)
+  expect(w.blits.filter(b => b.key === 'peeker-ctx').length).toBe(count)
+})
+
+test('a bare /peeker still opens the panel', async ($, on) => {
+  world(on)
+  expect((await command($, '')).text).toBe('Opened the bar styles panel.')
 })

@@ -21,6 +21,7 @@ A mod for the Claude Code CLI that replaces a `statusLine` script with a status 
 - **Clickable reset times:** a click cycles `2h13m` → `13:50` → `10/10 13:50`. A reset that isn't today shows its weekday (`Fri 05:00`). Each window keeps its own format, across sessions too.
 - **Bar styles** (`/peeker`): each bar gets its own style and width. There are 16 styles: Blocks, Parallelogram, Shade, Solid track, Smooth, Smooth bare, Line, Dots, Squares, Diamonds, Braille, ASCII, Arrow, Pie, Spark and Hidden (percent only).
 - **Colors follow the fill:** green below 50%, yellow from 50%, red from 80%.
+- **Motion:** the bars glint when they change. A warm sweep runs left to right when usage rises; an icy sweep runs right to left when it falls, and the emptied cells fade. The fill grows smoothly and blends its color, and the percent rolls to its new value with the changed digits flashing. Crossing 50% or 80% pulses the bar. A compaction drains the ctx bar with sparkles and shows `↻ −62%` for a moment. A 5h or weekly reset flashes the bar green with `✦ fresh`. The bars also move after every model response, not only at the end of a turn. Pick Lively (default), Subtle or Off in `/peeker`.
 
 ## Install
 
@@ -49,6 +50,9 @@ Remove the `statusLine` entry from the same file, or both lines will show.
 | `/peeker` | Open the bar styles panel |
 | `/peeker 5h` | Cycle the 5-hour reset time's format (same as clicking it) |
 | `/peeker wk` | Cycle the weekly reset time's format |
+| `/peeker demo` | Play a 20-second tour of the bar effects on the status line with made-up figures; `/peeker demo stop` ends it |
+
+The demo uses your Motion choice (with Off the figures change without effects) and goes back to your real usage when it ends.
 
 The panel docks beside the transcript. Click `‹` or `›` to step a bar's style or width, or click a reset time to change its format:
 
@@ -63,12 +67,16 @@ wk   █░░░░ 1%
     ‹ Blocks ›  ‹ 5 cells ›
 
 Reset  5h 13:50  wk 17/10 05:00
+Motion  ‹ Lively ›
 [ Reset bars ] [ Close ]
 ```
 
+Click `‹` or `›` beside Motion to pick Lively, Subtle or Off.
+
 ## How it works
 
-- **Figures:** context and rate limits come from `$.session.usage()`. These are the same readings a `statusLine` script gets on stdin as `context_window` and `rate_limits`. The line redraws after every response and every 30 seconds.
+- **Figures:** context and rate limits come from `$.session.usage()`. These are the same readings a `statusLine` script gets on stdin as `context_window` and `rate_limits`. The line redraws after every model response and every 30 seconds.
+- **Painting:** the bars are small cell grids repainted in place 20 times a second while an effect plays. Nothing is repainted while the bars are idle. Off draws the plain line.
 - **Effort:** read from settings, the model's own `modelSettings.<model>.effortLevel` first, then `effortLevel`, which is what `/effort` saves.
 - **Git:** read every 10 seconds and after each turn, with `git rev-parse --abbrev-ref HEAD`, `git status --porcelain --untracked-files=no` and `git rev-list --count @{u}..HEAD`.
 - **Your choices:** bar styles, widths and reset time formats are kept in the mod's own store, so they last across sessions.
@@ -81,6 +89,7 @@ Reset  5h 13:50  wk 17/10 05:00
 ## Development
 
 ```
+npx -y -p typescript@5.6.3 tsc -p .
 claude plugin validate .
 claude plugin test .
 ```
@@ -91,6 +100,9 @@ claude plugin test .
 | `hooks/line.ts` | the status line as colored segments |
 | `hooks/format.ts` | figures: pace delta, reset times, model names, token counts |
 | `hooks/styles.ts` | the bar styles and the stored preferences |
+| `hooks/motion.ts` | the bars' motion: what changed, the effects, each frame |
+| `hooks/cells.ts` | colors, blending, the cell encoding |
+| `hooks/demo.ts` | the demo's script |
 | `types/index.d.ts` | the mod's state contract |
 | `tests/` | tests for the figures, the bars, the line, the clicks and the panel |
 

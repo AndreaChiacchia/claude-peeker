@@ -1,6 +1,6 @@
 // The progress bar styles, each drawn as runs of fill, track and frame text.
 
-import type { BarId, BarPref, Prefs } from '../types'
+import type { BarId, BarPref, Motion, Prefs } from '../types'
 
 export type BarPart = { kind: 'fill' | 'track' | 'frame'; text: string }
 
@@ -101,7 +101,12 @@ export const DEFAULT_PREFS: Prefs = {
     week: { style: 'blocks', width: 5 },
   },
   timeModes: { five: 'rel', week: 'rel' },
+  motion: 'lively',
 }
+
+export const MOTIONS: readonly Motion[] = ['lively', 'subtle', 'off']
+
+export const MOTION_LABELS: Record<Motion, string> = { lively: 'Lively', subtle: 'Subtle', off: 'Off' }
 
 export function styleOf(id: string): BarStyle {
   return STYLES.find(style => style.id === id) ?? STYLES[0]!
@@ -126,5 +131,6 @@ export function normalizePrefs(raw: unknown): Prefs {
   return {
     bars: { ctx: bar('ctx'), five: bar('five'), week: bar('week') },
     timeModes: { five: mode(value.timeModes?.five), week: mode(value.timeModes?.week) },
+    motion: MOTIONS.find(m => m === value.motion) ?? DEFAULT_PREFS.motion,
   }
 }
