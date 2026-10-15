@@ -8,6 +8,8 @@ import {
   FIVE_BEFORE_MS,
   demoFrameAt,
   demoLine,
+  demoTurnAt,
+  isDemoChangeAt,
 } from '../hooks/demo'
 import type { LineData } from '../hooks/line'
 import { advance, createMotion, observe } from '../hooks/motion'
@@ -26,6 +28,7 @@ const data = (ctx: LineData['ctx']): LineData => ({
   prefs: DEFAULT_PREFS,
   now: STARTED,
   offsetMin: 0,
+  turn: null,
 })
 
 test('the script is read by the time that has passed', () => {
@@ -45,14 +48,37 @@ test('the demo replaces the three figures and nothing else', () => {
   expect(early.model).toBe(real.model)
   expect(early.project).toBe(real.project)
   expect(early.prefs).toBe(real.prefs)
-  expect(early.ctx).toEqual({ window: 200_000, percent: 20 })
+  expect(early.ctx).toEqual({ window: 200_000, percent: 20, tokens: 40_000 })
   expect(early.five).toEqual({ percent: 40, resetsAtMs: STARTED + FIVE_BEFORE_MS, delta: null })
   expect(early.week?.delta).toBeNull()
 
   const late = demoLine(real, 16000, STARTED)
   expect(late.five).toEqual({ percent: 0, resetsAtMs: STARTED + FIVE_AFTER_MS, delta: null })
 
-  expect(demoLine(data(null), 0, STARTED).ctx).toEqual({ window: 1_000_000, percent: 20 })
+  expect(demoLine(data(null), 0, STARTED).ctx).toEqual({ window: 1_000_000, percent: 20, tokens: 200_000 })
+})
+
+test('the demo carries the tokens of the window and a scripted turn', () => {
+  const line = demoLine(data({ window: 1_000_000, percent: 3 }), 0, STARTED)
+  expect(line.ctx?.tokens).toBe(200_000)
+  expect(line.turn).toEqual({ state: 'working', startAt: -64_000, elapsedMs: 64_000 })
+  expect(demoLine(data(null), 17_000, STARTED).turn).toEqual({ state: 'done', word: 'done', durationMs: 81_000 })
+})
+
+test('the demo turn works, shows its done mark for 2 s, then keeps its time', () => {
+  expect(demoTurnAt(0)).toEqual({ state: 'working', startAt: -64_000, elapsedMs: 64_000 })
+  expect(demoTurnAt(16_999).state).toBe('working')
+  expect(demoTurnAt(17_000)).toEqual({ state: 'done', word: 'done', durationMs: 81_000 })
+  expect(demoTurnAt(18_999).state).toBe('done')
+  expect(demoTurnAt(19_000)).toEqual({ state: 'idle', durationMs: 81_000 })
+})
+
+test('the line is drawn again when the figures or the turn state change', () => {
+  expect(isDemoChangeAt(1500)).toBe(true)
+  expect(isDemoChangeAt(17_000)).toBe(true)
+  expect(isDemoChangeAt(19_000)).toBe(true)
+  expect(isDemoChangeAt(17_250)).toBe(false)
+  expect(isDemoChangeAt(18_000)).toBe(false)
 })
 
 test('walking the script starts the effects it was written for', () => {

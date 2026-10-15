@@ -1,14 +1,28 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, RenderElement, RenderNode, Timer } from 'claude-code'
 
-import type { BarId, BarPref, GitInfo, Motion, Prefs } from '../types'
+import type { BarId, GitInfo, Motion, Prefs } from '../types'
 import { encodeCells } from './cells'
-import { DEMO_END_MS, DEMO_TICK_MS, demoFrameAt, demoLine } from './demo'
-import { nextTimeMode, resetLabel, tone, windowFigures } from './format'
+import type { Cell } from './cells'
+import { DEMO_END_MS, DEMO_TICK_MS, demoLine, isDemoChangeAt } from './demo'
+import { effortLabel, nextTimeMode, resetLabel, tone, windowFigures, wordForReason } from './format'
+import type { FinishWord } from './format'
 import { GRAY, TONES, lineGroups } from './line'
-import type { LineData, Segment } from './line'
-import { FRAME_MS, advance, composeBar, createMotion, freshBar, isActive, observe } from './motion'
+import type { LineData, PieceId, Segment, TurnView } from './line'
+import {
+  FINISH_MS,
+  FRAME_MS,
+  advance,
+  composeBar,
+  createMotion,
+  freshBar,
+  freshRow,
+  isActive,
+  observe,
+} from './motion'
 import type { MotionState } from './motion'
+import { composeDot, composeTail, markDone, tailWidth } from './row'
+import type { DotState, TailState } from './row'
 import {
   BARS,
   DEFAULT_PREFS,
@@ -26,7 +40,9 @@ const PANE = 'peeker-bars'
 const STORE_KEY = 'prefs'
 const TICK_MS = 30_000
 const GIT_EVERY_MS = 10_000
-/** The Raster keys are this prefix and the bar id; never claudeticker's `row`. */
+/** The plain line redraws this often while a turn runs, so the elapsed time ticks. */
+const ELAPSED_TICK_MS = 1000
+/** The Raster keys are this prefix and the piece id; never claudeticker's `row`. */
 const RASTER_PREFIX = 'peeker-'
 /** Fresh draws whose first blit was refused before the slot is drawn still. */
 const MAX_REFUSED_MOUNTS = 3
@@ -58,12 +74,26 @@ async function savePrefs($: EngineInterface, change: (p: Prefs) => Prefs): Promi
 let motion: MotionState = createMotion()
 let level: Motion = 'lively'
 let timer: Timer | null = null
+/** Redraws the plain line once a second while a turn runs. */
+let stillTimer: Timer | null = null
 let isBlitting = false
-/** The mounted Rasters the timer repaints: the render's request and each bar's preference and width. */
-type Site = { requestId: string; bars: Partial<Record<BarId, { pref: BarPref; width: number }>> }
+/** One Raster of the line: its id, its width at the render, and its cells at a moment (ms on the demo or the real clock). */
+type Piece = { id: PieceId; width: number; compose: (now: number) => Cell[] }
+/** The mounted Rasters the timer repaints: the render's request, each piece, and whether a turn is working. */
+type Site = { requestId: string; pieces: Piece[]; isLive: boolean }
 let site: Site | null = null
 /** What each Raster last showed, so an unchanged frame is not sent again. */
-const lastBlit = new Map<BarId, string>()
+const lastBlit = new Map<PieceId, string>()
+/** The main loop's running turn; null between turns. */
+let turn: { startAt: number } | null = null
+/** How the main loop's last turn ended, and when. */
+let lastTurn: { word: FinishWord; durationMs: number; at: number } | null = null
+/** False until a render has drawn: a bar that appears after that enters with its effects, the first ones are taken silently. */
+let primed = false
+/** What the main loop's last request sent, and the model/settings basis the line showed when it did. */
+let mainStep: { model: string; effort: string | number | null; basis: string | null } | null = null
+/** The model/settings basis of the last line drawn: a request counts only while the settings still match it. */
+let lastBasis: string | null = null
 /** Blits accepted since the last render that drew the Rasters. */
 let framesSinceMount = 0
 /** Fresh draws whose first blit was refused, while no blit has ever been accepted. */
@@ -80,12 +110,22 @@ function stopTimer(): void {
   timer = null
 }
 
+function stopStill(): void {
+  stillTimer?.cancel()
+  stillTimer = null
+}
+
+function ensureStill($: EngineInterface): void {
+  if (stillTimer === null) stillTimer = $.clock.every(ELAPSED_TICK_MS, () => $.ui.invalidate('ui.render'))
+}
+
 /**
  * Every bar takes its next value silently (no effect fires going into or out of the demo), and no frame
  * of a silenced bar is blitted before the next render mounts the new values.
  */
 function silenceBars(): void {
   for (const id of BAR_IDS) motion.bars[id] = freshBar()
+  motion.row = freshRow()
   stopTimer()
   site = null
 }
@@ -95,6 +135,8 @@ function endDemo($: EngineInterface): void {
   demo.timer.cancel()
   demo = null
   silenceBars()
+  // The real figures come back silently.
+  primed = false
   $.ui.invalidate('ui.render')
 }
 
@@ -103,7 +145,7 @@ function onDemoTick($: EngineInterface): void {
   demo.ticks += 1
   const elapsed = demo.ticks * DEMO_TICK_MS
   if (elapsed >= DEMO_END_MS) endDemo($)
-  else if (demoFrameAt(elapsed) !== demoFrameAt(elapsed - DEMO_TICK_MS)) $.ui.invalidate('ui.render')
+  else if (isDemoChangeAt(elapsed)) $.ui.invalidate('ui.render')
 }
 
 /** Starts the demo, or restarts it from the beginning when one runs. */
@@ -112,19 +154,21 @@ async function startDemo($: EngineInterface): Promise<void> {
   demo?.timer.cancel()
   demo = { ticks: 0, startedAt, timer: $.clock.every(DEMO_TICK_MS, () => onDemoTick($)) }
   silenceBars()
+  // The demo's baseline is taken silently.
+  primed = false
   $.ui.invalidate('ui.render')
 }
 
-/** True while there are bars to repaint and something to move in them. */
+/** True while there are pieces to repaint and something to move in them: a working turn, or an effect before its end. */
 function needsTimer(): boolean {
-  return site !== null && !isStaticFallback && level !== 'off' && isActive(motion)
+  return site !== null && !isStaticFallback && level !== 'off' && (site.isLive || isActive(motion))
 }
 
 function kick($: EngineInterface): void {
   if (timer === null && needsTimer()) timer = $.clock.every(FRAME_MS, () => void step($))
 }
 
-/** One frame: the motion advances and each bar's Raster is repainted in place. */
+/** One frame: the motion advances and each piece's Raster is repainted in place. */
 async function step($: EngineInterface): Promise<void> {
   if (isBlitting || site === null) return
   isBlitting = true
@@ -136,24 +180,25 @@ async function step($: EngineInterface): Promise<void> {
       return
     }
     advance(motion)
-    for (const id of BAR_IDS) {
-      const one = target.bars[id]
-      if (one === undefined) continue
-      const cells = composeBar(motion, id, one.pref, level)
-      if (cells.length !== one.width) {
-        // A width change (9% to 10%, a badge appearing or leaving) is a redraw, never a blit.
+    const now = demo !== null ? demo.ticks * DEMO_TICK_MS : await $.clock.now()
+    // A render replaced the site while the clock was read: its own mount is the newer frame; the timer goes on.
+    if (site !== target) return
+    for (const piece of target.pieces) {
+      const cells = piece.compose(now)
+      if (cells.length !== piece.width) {
+        // A width change (9% to 10%, a badge appearing or leaving, 9s to 10s) is a redraw, never a blit.
         stopTimer()
         $.ui.invalidate('ui.render')
 
         return
       }
       const encoded = encodeCells(cells)
-      if (encoded === lastBlit.get(id)) continue
-      const r = await $.ui.blit({ requestId: target.requestId, key: RASTER_PREFIX + id, cells: encoded })
+      if (encoded === lastBlit.get(piece.id)) continue
+      const r = await $.ui.blit({ requestId: target.requestId, key: RASTER_PREFIX + piece.id, cells: encoded })
       if (r.deny === undefined) {
         everBlitted = true
         framesSinceMount += 1
-        lastBlit.set(id, encoded)
+        lastBlit.set(piece.id, encoded)
       } else if (framesSinceMount === 0 && !everBlitted) {
         // The first blit after a fresh draw was refused: this slot may not take blits. A fresh mount retries.
         refusedMounts += 1
@@ -171,6 +216,7 @@ async function step($: EngineInterface): Promise<void> {
 
         return
       }
+      if (site !== target) return
     }
     if (!needsTimer()) stopTimer()
   } finally {
@@ -180,6 +226,15 @@ async function step($: EngineInterface): Promise<void> {
 
 const cycleTime = ($: EngineInterface, id: 'five' | 'week') =>
   savePrefs($, old => ({ ...old, timeModes: { ...old.timeModes, [id]: nextTimeMode(old.timeModes[id]) } }))
+
+/** The main loop's turn as the line shows it at `now`: working, the done mark for `FINISH_MS`, then the last turn's time. */
+function turnView(now: number): TurnView | null {
+  if (turn !== null) return { state: 'working', startAt: turn.startAt, elapsedMs: Math.max(0, now - turn.startAt) }
+  if (lastTurn === null) return null
+  if (now - lastTurn.at < FINISH_MS) return { state: 'done', word: lastTurn.word, durationMs: lastTurn.durationMs }
+
+  return { state: 'idle', durationMs: lastTurn.durationMs }
+}
 
 async function lineData($: EngineInterface): Promise<LineData> {
   const [usage, model, root, settings, p, g, now] = await Promise.all([
@@ -191,21 +246,31 @@ async function lineData($: EngineInterface): Promise<LineData> {
     read($, git),
     $.clock.now(),
   ])
+  // What the main loop's last request sent wins over settings, for as long as the model and settings are those it was sent under.
+  const settingsValue = settingsEffort(settings, model)
+  const basis = `${model}\n${settingsValue ?? ''}`
+  lastBasis = basis
+  const fromStep = mainStep !== null && mainStep.basis === basis ? mainStep : null
 
   return {
-    model,
-    effort: settingsEffort(settings, model),
+    model: fromStep?.model ?? model,
+    effort: fromStep === null ? settingsValue : effortLabel(fromStep.effort),
     project: basename(root),
     git: g,
     ctx:
       usage.context.window > 0
-        ? { window: usage.context.window, percent: Math.round(usage.context.percent ?? 0) }
+        ? {
+            window: usage.context.window,
+            percent: Math.round(usage.context.percent ?? 0),
+            tokens: usage.context.tokens ?? null,
+          }
         : null,
     five: windowFigures(usage.rateLimits.find(w => w.kind === 'five_hour'), 5, now),
     week: windowFigures(usage.rateLimits.find(w => w.kind === 'seven_day'), 168, now),
     prefs: p,
     now,
     offsetMin: -new Date(now).getTimezoneOffset(),
+    turn: turnView(now),
   }
 }
 
@@ -266,14 +331,14 @@ function cycle<T>(list: readonly T[], at: T, by: 1 | -1): T {
 /**
  * The line as groups that never shrink, wrapping whole onto the next row when
  * narrow: each group one flow of nested Text (a fragment lays out as a column
- * here), a reset time its own Button. A bar is its own piece: `barNode` may draw it
- * (as a Raster); without one it stays the same colored Text.
+ * here), a reset time its own Button. A bar, the dot and the time are each their own piece:
+ * `pieceNode` may draw one (as a Raster); without one it stays the same colored Text.
  */
 function drawLine(
   $: EngineInterface,
   ui: Ui,
   groups: Segment[][],
-  barNode?: (id: BarId) => RenderNode | undefined,
+  pieceNode?: (id: PieceId) => RenderNode | undefined,
 ) {
   const { Box, Text, Button } = ui
   const run = (segments: Segment[]) => (
@@ -286,27 +351,27 @@ function drawLine(
     </Text>
   )
   const group = (segments: Segment[], at: number) => {
-    const pieces: Segment[][] = []
+    const runs: Segment[][] = []
     for (const s of segments) {
-      const last = pieces.at(-1)
-      if (s.press || !last || last[0]?.press || last[0]?.bar !== s.bar) pieces.push([s])
+      const last = runs.at(-1)
+      if (s.press || !last || last[0]?.press || last[0]?.piece !== s.piece) runs.push([s])
       else last.push(s)
     }
 
     return (
       <Box flexDirection="row" flexShrink={0}>
         {at > 0 ? <Text dimColor> · </Text> : null}
-        {pieces.map(piece => {
-          const id = piece[0]?.press
-          const bar = piece[0]?.bar
-          if (bar) return barNode?.(bar) ?? run(piece)
+        {runs.map(one => {
+          const id = one[0]?.press
+          const piece = one[0]?.piece
+          if (piece) return pieceNode?.(piece) ?? run(one)
 
           return id ? (
             <Button key={`reset-${id}`} plain onPress={() => cycleTime($, id)}>
-              {run(piece)}
+              {run(one)}
             </Button>
           ) : (
-            run(piece)
+            run(one)
           )
         })}
       </Box>
@@ -323,6 +388,7 @@ function drawLine(
 export const register: Register = on => {
   // A fresh load starts from a clean state.
   stopTimer()
+  stopStill()
   demo?.timer.cancel()
   demo = null
   motion = createMotion()
@@ -334,6 +400,11 @@ export const register: Register = on => {
   refusedMounts = 0
   everBlitted = false
   isStaticFallback = false
+  turn = null
+  lastTurn = null
+  primed = false
+  mainStep = null
+  lastBasis = null
 
   on('session.start', async ($, e, next) => {
     const stored = await $.store.get(STORE_KEY)
@@ -351,6 +422,12 @@ export const register: Register = on => {
     // silently: a cleared context is not a compaction.
     endDemo($)
     motion = createMotion()
+    stopStill()
+    turn = null
+    lastTurn = null
+    primed = false
+    mainStep = null
+    lastBasis = null
 
     return next(e)
   })
@@ -365,7 +442,9 @@ export const register: Register = on => {
 
   // The usage moves with every model response, not only at the end of a turn: the line follows
   // each one. The streamed chunks and the result pass through unchanged.
+  // The main loop's request also tells the model and effort it runs on: kept for the line (no await before `next`).
   on('turn.step', async function* ($, e, next) {
+    if (e.agentId === undefined) mainStep = { model: e.model, effort: e.effort ?? null, basis: lastBasis }
     const stream = next(e)
     for await (const chunk of stream) yield chunk
     const result = await stream.result
@@ -374,10 +453,28 @@ export const register: Register = on => {
     return result
   })
 
-  on('turn.complete', async ($, e, next) => {
-    void refreshGit($)
+  // The main loop's turn starts the dot and the time; a subagent's turn changes nothing here.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    turn = { startAt: await $.clock.now() }
+    motion.row.doneStart = null
+    $.ui.invalidate('ui.render')
 
     return next(e)
+  })
+
+  // The main loop's end: the done mark shows for `FINISH_MS`, then the last turn's time stays.
+  on('turn.complete', async ($, e, next) => {
+    void refreshGit($)
+    const result = await next(e)
+    if (e.agentId === undefined) {
+      turn = null
+      lastTurn = { word: wordForReason(e.reason), durationMs: e.durationMs, at: await $.clock.now() }
+      $.ui.invalidate('ui.render')
+      $.clock.after(FINISH_MS, () => $.ui.invalidate('ui.render'))
+    }
+
+    return result
   })
 
   on('command.run', { command: 'peeker' }, async ($, e) => {
@@ -414,7 +511,7 @@ export const register: Register = on => {
   // sits above the other.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const [drawn, real] = await Promise.all([next(e), lineData($)])
-    // A running demo replaces only the three figures, in this render's local value: real usage is never written.
+    // A running demo replaces only the three figures, the tokens and the turn, in this render's local value: real usage is never written.
     const data = demo ? demoLine(real, demo.ticks * DEMO_TICK_MS, demo.startedAt) : real
     const ui = $.ui.resolve(e)
     const [hint, ...below] = stacked(drawn)
@@ -423,38 +520,72 @@ export const register: Register = on => {
     // surface and a slot that refuses blits read every value silently and draw the plain line.
     level = data.prefs.motion
     const moving = level !== 'off' && e.surface === 'terminal' && !isStaticFallback ? level : null
-    const readings: Partial<Record<BarId, { percent: number; resetsAtMs: number | null }>> = {}
-    if (data.ctx) readings.ctx = { percent: data.ctx.percent, resetsAtMs: null }
+    const readings: Partial<Record<BarId, { percent: number; resetsAtMs: number | null; tokens?: number | null }>> = {}
+    if (data.ctx) readings.ctx = { percent: data.ctx.percent, resetsAtMs: null, tokens: data.ctx.tokens ?? null }
     if (data.five) readings.five = { percent: data.five.percent, resetsAtMs: data.five.resetsAtMs }
     if (data.week) readings.week = { percent: data.week.percent, resetsAtMs: data.week.resetsAtMs }
     for (const id of BAR_IDS) {
       const reading = readings[id]
-      if (reading) observe(motion, id, reading, data.prefs.bars[id], moving ?? 'off')
+      if (reading) observe(motion, id, reading, data.prefs.bars[id], moving ?? 'off', primed)
       else motion.bars[id] = freshBar()
     }
+    primed = true
+
+    // The dot follows the main loop's turn; the tail is its time, its finish mark, or the last turn's time.
+    const view = data.turn
+    const dot: DotState = view?.state === 'working' ? 'working' : 'idle'
+    let tail: TailState | null = null
+    if (view?.state === 'working') tail = { kind: 'live', elapsedMs: view.elapsedMs }
+    else if (view?.state === 'done') {
+      tail = {
+        kind: 'done',
+        word: view.word,
+        durationMs: view.durationMs,
+        isLean: data.ctx !== null && tone(data.ctx.percent) === 'ok',
+      }
+    } else if (view?.state === 'idle') tail = { kind: 'idle', durationMs: view.durationMs }
+    if (moving !== null && view?.state === 'done') markDone(motion)
+    else motion.row.doneStart = null
 
     let line: RenderNode
     if (moving && e.surface === 'terminal') {
       // Only the terminal surface has a Raster: narrowing `e` here narrows what `resolve` returns.
       const termUi = $.ui.resolve(e)
       const { Raster } = termUi
-      const bars: Site['bars'] = {}
-      const encoded: Partial<Record<BarId, string>> = {}
+      stopStill()
+      const pieces: Piece[] = []
+      const encoded: Partial<Record<PieceId, string>> = {}
       lastBlit.clear()
+      const mount = (id: PieceId, width: number, cells: Cell[], compose: (now: number) => Cell[]): void => {
+        const mounted = encodeCells(cells)
+        encoded[id] = mounted
+        pieces.push({ id, width, compose })
+        lastBlit.set(id, mounted)
+      }
+      mount('dot', 1, composeDot(motion, dot, moving), () => composeDot(motion, dot, moving))
       for (const id of BAR_IDS) {
         if (!readings[id]) continue
         const pref = data.prefs.bars[id]
         const cells = composeBar(motion, id, pref, moving)
-        const mounted = encodeCells(cells)
-        encoded[id] = mounted
-        bars[id] = { pref, width: cells.length }
-        lastBlit.set(id, mounted)
+        mount(id, cells.length, cells, () => composeBar(motion, id, pref, moving))
       }
-      site = { requestId: e.requestId, bars }
+      if (tail !== null) {
+        const shown = tail
+        const startAt = view?.state === 'working' ? view.startAt : 0
+        mount('tail', tailWidth(shown), composeTail(motion, shown, moving), at =>
+          composeTail(
+            motion,
+            shown.kind === 'live' ? { kind: 'live', elapsedMs: Math.max(0, at - startAt) } : shown,
+            moving,
+          ),
+        )
+      }
+      const widths = new Map(pieces.map(p => [p.id, p.width] as const))
+      site = { requestId: e.requestId, pieces, isLive: dot === 'working' }
       framesSinceMount = 0
       line = drawLine($, termUi, lineGroups(data), id => {
         const cells = encoded[id]
-        const width = bars[id]?.width
+        const width = widths.get(id)
 
         return cells === undefined || width === undefined ? undefined : (
           <Raster key={RASTER_PREFIX + id} columns={width} rows={1} cells={cells} />
@@ -465,6 +596,8 @@ export const register: Register = on => {
       stopTimer()
       site = null
       line = drawLine($, ui, lineGroups(data))
+      if (dot === 'working') ensureStill($)
+      else stopStill()
     }
 
     return (

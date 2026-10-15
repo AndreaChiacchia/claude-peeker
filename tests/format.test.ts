@@ -1,6 +1,17 @@
 import { expect, test } from 'claude-code/testing'
 
-import { formatTokens, modelLabel, nextTimeMode, paceDelta, resetLabel, windowFigures } from '../hooks/format'
+import {
+  doneText,
+  effortLabel,
+  formatElapsed,
+  formatTokens,
+  modelLabel,
+  nextTimeMode,
+  paceDelta,
+  resetLabel,
+  windowFigures,
+  wordForReason,
+} from '../hooks/format'
 import { STYLES, drawBar, filledCells, normalizePrefs } from '../hooks/styles'
 
 const HOUR = 3600_000
@@ -52,6 +63,31 @@ test('tokens', () => {
   expect(formatTokens(1_000_000)).toBe('1M')
   expect(formatTokens(200_000)).toBe('200K')
   expect(formatTokens(1_500_000)).toBe('1.5M')
+})
+
+test('a turn time reads seconds, minutes, then hours', () => {
+  expect(formatElapsed(0)).toBe('0s')
+  expect(formatElapsed(-5)).toBe('0s')
+  expect(formatElapsed(42_999)).toBe('42s')
+  expect(formatElapsed(72_000)).toBe('1m12s')
+  expect(formatElapsed(3_720_000)).toBe('1h02m')
+})
+
+test('the finish mark and the word for how a turn ended', () => {
+  expect(doneText('done', 42_000)).toBe('✦ done · 42s')
+  expect(doneText('failed', 5_000)).toBe('✗ failed · 5s')
+  expect(doneText('stopped', 63_000)).toBe('✗ stopped · 1m03s')
+  expect(wordForReason('answer')).toBe('done')
+  expect(wordForReason('aborted')).toBe('stopped')
+  expect(wordForReason('error')).toBe('failed')
+  expect(wordForReason('refusal')).toBe('failed')
+})
+
+test('an effort reads as the request sent it', () => {
+  expect(effortLabel(32_000)).toBe('32K think')
+  expect(effortLabel(null)).toBeNull()
+  expect(effortLabel(undefined)).toBeNull()
+  expect(effortLabel('high')).toBe('high')
 })
 
 test('bars keep the old cell count and every style draws its width', () => {

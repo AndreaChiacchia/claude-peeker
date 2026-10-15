@@ -11,12 +11,18 @@ export const GLINT_UP = 0xfff5d7
 export const GLINT_DOWN = 0x5fd7ff
 /** The badge color of the Subtle level. */
 export const PLAIN = 0x8a8a8a
+/** The working dot's lavender: the cell twin of `line.ts` LAVENDER. */
+export const LIVE = 0xafafd7
+/** The red the dot pulses toward when ctx crosses 80%. */
+export const HOT = 0xff0000
 
 /** Glyph code points, all narrow BMP characters. */
 export const SPARK_FULL = 0x2726 // ✦
 export const SPARK_HOLLOW = 0x2727 // ✧
 export const COMPACT_MARK = 0x21bb // ↻
 export const MINUS = 0x2212 // −
+export const DOT_FULL = 0x25cf // ●
+export const DOT_EMPTY = 0x25cb // ○
 
 /** `#rrggbb` as the number `0xRRGGBB`. */
 export function rgb(hex: string): number {

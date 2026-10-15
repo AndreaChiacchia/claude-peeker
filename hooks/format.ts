@@ -92,6 +92,36 @@ export function resetLabel(resetsAtMs: number, now: number, mode: TimeMode, offs
   return isToday ? clock : `${WEEKDAYS[at.getUTCDay()]} ${clock}`
 }
 
+export type FinishWord = 'done' | 'stopped' | 'failed'
+
+/** How a turn that ended reads: answered is done, interrupted is stopped, anything else failed. */
+export function wordForReason(reason: string): FinishWord {
+  if (reason === 'answer') return 'done'
+
+  return reason === 'aborted' ? 'stopped' : 'failed'
+}
+
+/** `42s`, `1m12s`, `1h02m`: the time of a turn. */
+export function formatElapsed(ms: number): string {
+  const s = Math.floor(Math.max(0, ms) / 1000)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m${pad(s % 60)}s`
+
+  return `${Math.floor(s / 3600)}h${pad(Math.floor((s % 3600) / 60))}m`
+}
+
+/** `✦ done · 42s`: the mark that replaces the elapsed time of a turn that ended. */
+export function doneText(word: FinishWord, durationMs: number): string {
+  return `${word === 'done' ? '✦' : '✗'} ${word} · ${formatElapsed(durationMs)}`
+}
+
+/** The effort a request sent, as the line shows it: a thinking budget reads `32K think`. */
+export function effortLabel(effort: string | number | null | undefined): string | null {
+  if (effort === null || effort === undefined) return null
+
+  return typeof effort === 'number' ? `${formatTokens(effort)} think` : effort
+}
+
 /** A stored reading as it stands now: a window whose reset has passed reads as fresh. */
 export function windowFigures(
   window: { percentUsed: number; resetsAt?: string } | undefined,

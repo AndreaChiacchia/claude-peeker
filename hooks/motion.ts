@@ -18,7 +18,7 @@ import {
   textCells,
 } from './cells'
 import type { Cell } from './cells'
-import { tone } from './format'
+import { formatTokens, tone } from './format'
 import { TONES } from './line'
 import { drawBar, styleOf } from './styles'
 import type { BarPart } from './styles'
@@ -51,6 +51,16 @@ export const BADGE_FRAMES = 40
 export const COMPACT_DROP = 20
 /** A rate window's reset time moving later by more than this (10 min) is a new window. */
 export const RESET_SHIFT_MS = 600_000
+/** The done mark of a turn stays this long (2 s). */
+export const FINISH_MS = 2000
+/** The done mark's time, in frames. */
+export const DONE_FRAMES = FINISH_MS / FRAME_MS
+/** The Lively working dot blinks every this many frames (0.5 s). */
+export const DOT_BLINK_FRAMES = 10
+/** The Subtle working dot changes color every this many frames (1 s). */
+export const DOT_BREATHE_FRAMES = 20
+/** The done mark twinkles every this many frames. */
+export const TWINKLE_FRAMES = 4
 
 const PULSE_LENGTH = PULSE_PROFILE.length
 
@@ -78,6 +88,16 @@ export const LEVELS: Record<'lively' | 'subtle', Level> = {
 
 type Dir = 'up' | 'down'
 
+/** A figure that rolls like an odometer toward its target. */
+export type Odo = {
+  /** The value it rolls toward; `null` = no figure. */
+  target: number | null
+  /** The value shown now. */
+  shown: number
+  /** Digit index from which the figure flashes, until which tick. */
+  flash: { from: number; until: number; dir: Dir } | null
+}
+
 export type BarAnim = {
   /** The last percent seen; `null` = never seen (the next value is taken silently). */
   target: number | null
@@ -102,12 +122,21 @@ export type BarAnim = {
     oldColor: number
     sparkle: boolean
   } | null
-  pulse: { kind: 'level' | 'reset'; start: number } | null
+  /** A pulse; `isHot` when ctx crossed 80% (the state dot pulses red with it). */
+  pulse: { kind: 'level' | 'reset'; start: number; isHot: boolean } | null
   /** `text` is used by `compact`; `fresh` builds its text per frame. */
   badge: { kind: 'compact' | 'fresh'; text: string; start: number } | null
+  /** The context tokens, rolling. Only ctx ever has a target. */
+  tokens: Odo
 }
 
-export type MotionState = { tick: number; bars: Record<BarId, BarAnim> }
+/** The line's state outside the bars. */
+export type RowAnim = {
+  /** When the turn's done mark started; null while none shows. */
+  doneStart: number | null
+}
+
+export type MotionState = { tick: number; bars: Record<BarId, BarAnim>; row: RowAnim }
 
 export function freshBar(): BarAnim {
   return {
@@ -121,11 +150,16 @@ export function freshBar(): BarAnim {
     drain: null,
     pulse: null,
     badge: null,
+    tokens: { target: null, shown: 0, flash: null },
   }
 }
 
+export function freshRow(): RowAnim {
+  return { doneStart: null }
+}
+
 export function createMotion(): MotionState {
-  return { tick: 0, bars: { ctx: freshBar(), five: freshBar(), week: freshBar() } }
+  return { tick: 0, bars: { ctx: freshBar(), five: freshBar(), week: freshBar() }, row: freshRow() }
 }
 
 /** Ease-out quad: `1 - (1 - p)^2` with `p = min(1, elapsed / frames)`. */
@@ -173,7 +207,8 @@ function growAt(b: BarAnim, t: number): number | null {
   return g.from + (g.to - g.from) * ease(t - g.start, GROW_FRAMES)
 }
 
-function settle(b: BarAnim, next: { percent: number; resetsAtMs: number | null }): void {
+/** Takes both figures as they are, with no effect running. */
+function settle(b: BarAnim, next: { percent: number; resetsAtMs: number | null; tokens?: number | null }): void {
   b.target = next.percent
   b.shown = next.percent
   b.resetsAtMs = next.resetsAtMs
@@ -184,27 +219,49 @@ function settle(b: BarAnim, next: { percent: number; resetsAtMs: number | null }
   b.drain = null
   b.pulse = null
   b.badge = null
+  b.tokens =
+    next.tokens == null
+      ? { target: null, shown: 0, flash: null }
+      : { target: next.tokens, shown: next.tokens, flash: null }
 }
 
 /**
  * Called once per present bar on every render: a changed value starts its effects, the same value does nothing
- * (repeated renders are harmless), the first value and every value under Off are taken silently.
+ * (repeated renders are harmless), the first value is taken silently unless it is an entrance (a bar that
+ * appears after the mod's first draw fills in from empty), and every value under Off is taken silently.
  */
 export function observe(
   m: MotionState,
   id: BarId,
-  next: { percent: number; resetsAtMs: number | null },
+  next: { percent: number; resetsAtMs: number | null; tokens?: number | null },
   pref: BarPref,
   level: Motion,
+  isEntrance = false,
 ): void {
   const b = m.bars[id]
-  const prev = b.target
   const t = m.tick
-  if (prev === null || level === 'off') {
+  let entering = false
+  if (b.target === null) {
+    if (level === 'off' || !isEntrance) {
+      settle(b, next)
+
+      return
+    }
+    entering = true
+    b.target = 0
+    b.shown = 0
+    b.resetsAtMs = next.resetsAtMs
+    b.tokens = { target: next.tokens == null ? null : 0, shown: 0, flash: null }
+  }
+  if (level === 'off') {
     settle(b, next)
 
     return
   }
+  const prev = b.target ?? 0
+  if (next.tokens == null) b.tokens = { target: null, shown: 0, flash: null }
+  else if (b.tokens.target === null && !entering) b.tokens = { target: next.tokens, shown: next.tokens, flash: null }
+  else b.tokens.target = next.tokens
   if (next.percent === prev) {
     b.resetsAtMs = next.resetsAtMs
 
@@ -245,7 +302,7 @@ export function observe(
       (next.resetsAtMs !== null && b.resetsAtMs !== null && next.resetsAtMs > b.resetsAtMs + RESET_SHIFT_MS))
 
   if (isReset) {
-    b.pulse = { kind: 'reset', start: t }
+    b.pulse = { kind: 'reset', start: t, isHot: false }
     b.badge = { kind: 'fresh', text: '', start: t }
     startDrain(false)
     startColor()
@@ -261,7 +318,9 @@ export function observe(
     b.glint = { dir: 'up', start: t, passes: d >= BIG_STEP ? L.glintPasses : 1, fill: newF }
     b.grow = { from: growAt(b, t) ?? prev, to: next.percent, start: t }
     startColor()
-    if (RANK[nextTone] > RANK[tone(prev)]) b.pulse = { kind: 'level', start: t }
+    if (RANK[nextTone] > RANK[tone(prev)] && !entering) {
+      b.pulse = { kind: 'level', start: t, isHot: id === 'ctx' && nextTone === 'hot' }
+    }
   } else {
     b.glint = { dir: 'down', start: t, passes: -d >= BIG_STEP ? L.glintPasses : 1, fill: newF }
     startDrain(false)
@@ -273,22 +332,46 @@ export function observe(
   b.resetsAtMs = next.resetsAtMs
 }
 
+/** The digit index where two figure texts first differ. */
+function firstDiff(before: string, after: string): number {
+  let from = 0
+  const shorter = Math.min(before.length, after.length)
+  while (from < shorter && before[from] === after[from]) from++
+
+  return from
+}
+
+/** The token figure as drawn: right-aligned to the width its target takes. */
+function tokenText(o: Odo): string {
+  return formatTokens(o.shown).padStart(formatTokens(o.target ?? o.shown).length)
+}
+
 /** One frame on: the tick moves, and on roll ticks every figure steps toward its target, flashing the digits that changed. */
 export function advance(m: MotionState): void {
   m.tick += 1
   if (m.tick % ROLL_EVERY !== 0) return
   for (const id of Object.keys(m.bars) as BarId[]) {
     const b = m.bars[id]
-    if (b.target === null || b.shown === b.target) continue
-    const gap = b.target - b.shown
-    const step = Math.min(Math.abs(gap), Math.max(1, Math.ceil(Math.abs(gap) / 4)))
-    const before = `${b.shown}%`
-    b.shown += gap > 0 ? step : -step
-    const after = `${b.shown}%`
-    let from = 0
-    const shorter = Math.min(before.length, after.length)
-    while (from < shorter && before[from] === after[from]) from++
-    b.flash = { from, until: m.tick + FLASH_FRAMES, dir: gap > 0 ? 'up' : 'down' }
+    if (b.target !== null && b.shown !== b.target) {
+      const gap = b.target - b.shown
+      const step = Math.min(Math.abs(gap), Math.max(1, Math.ceil(Math.abs(gap) / 4)))
+      const before = `${b.shown}%`
+      b.shown += gap > 0 ? step : -step
+      const after = `${b.shown}%`
+      b.flash = { from: firstDiff(before, after), until: m.tick + FLASH_FRAMES, dir: gap > 0 ? 'up' : 'down' }
+    }
+    const o = b.tokens
+    if (o.target !== null && o.shown !== o.target) {
+      const unit = o.target < 1000 ? 1 : o.target < 1_000_000 ? 1000 : 100_000
+      const gap = o.target - o.shown
+      const step = Math.min(Math.abs(gap), Math.max(unit, Math.ceil(Math.abs(gap) / 4)))
+      const before = tokenText(o)
+      o.shown += Math.sign(gap) * step
+      const after = tokenText(o)
+      if (before !== after) {
+        o.flash = { from: firstDiff(before, after), until: m.tick + FLASH_FRAMES, dir: gap > 0 ? 'up' : 'down' }
+      }
+    }
   }
 }
 
@@ -309,12 +392,15 @@ export function isActive(m: MotionState): boolean {
     if (b.pulse !== null && t < b.pulse.start + PULSE_LENGTH * PULSE_COUNT) return true
     if (b.badge !== null && t < b.badge.start + BADGE_FRAMES) return true
     if (b.flash !== null && t < b.flash.until) return true
+    if (b.tokens.target !== null && b.tokens.shown !== b.tokens.target) return true
+    if (b.tokens.flash !== null && t < b.tokens.flash.until) return true
   }
+  if (m.row.doneStart !== null && t < m.row.doneStart + DONE_FRAMES) return true
 
   return false
 }
 
-/** The frame of one bar at `m.tick`: the bar cells, a space and the figure, then the badge when one shows. */
+/** The frame of one bar at `m.tick`: the bar cells, a space and the figure, then the tokens and the badge when they show. */
 export function composeBar(m: MotionState, id: BarId, pref: BarPref, level: 'lively' | 'subtle'): Cell[] {
   const b = m.bars[id]
   const L = LEVELS[level]
@@ -421,7 +507,21 @@ export function composeBar(m: MotionState, id: BarId, pref: BarPref, level: 'liv
   }
   out.push(...figure)
 
-  // 6. The badge.
+  // 6. The token figure, an odometer: ` · ` then the tokens, changed digits flashing.
+  if (b.tokens.target !== null) {
+    out.push(...textCells(' · ', PLAIN))
+    const tokens = textCells(tokenText(b.tokens), PLAIN)
+    const tokenFlash = b.tokens.flash
+    if (tokenFlash !== null && t < tokenFlash.until) {
+      const color = tokenFlash.dir === 'up' ? GLINT_UP : GLINT_DOWN
+      tokens.forEach((cell, i) => {
+        if (i >= tokenFlash.from) cell.fg = mixColor(cell.fg, color, L.flashMix)
+      })
+    }
+    out.push(...tokens)
+  }
+
+  // 7. The badge.
   const badge = b.badge
   if (badge !== null && t < badge.start + BADGE_FRAMES) {
     out.push({ cp: 0x20, fg: DEFAULT, bg: DEFAULT })

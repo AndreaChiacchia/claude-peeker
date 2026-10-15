@@ -105,6 +105,57 @@ test('only crossing 50 or 80 upward pulses the bar', () => {
   expect(moved(pref, 55, 45).bars.ctx.pulse).toBeNull()
 })
 
+test('the token figure rolls like an odometer toward its value', () => {
+  const pref = { style: 'blocks', width: 10 }
+  const m = createMotion()
+  observe(m, 'ctx', { percent: 12, resetsAtMs: null, tokens: 120_000 }, pref, 'lively')
+  expect(cellText(composeBar(m, 'ctx', pref, 'lively')).endsWith('12% · 120K')).toBe(true)
+  observe(m, 'ctx', { percent: 52, resetsAtMs: null, tokens: 520_000 }, pref, 'lively')
+  const seen = new Set<string>()
+  for (const frame of frames(m, pref, 'lively', 80)) {
+    const figure = /% · +(\S+)$/.exec(cellText(frame))?.[1]
+    if (figure !== undefined) seen.add(figure)
+  }
+  const middle = [...seen].filter(f => f !== '120K' && f !== '520K')
+  expect(middle.length).toBeGreaterThan(0)
+  expect(cellText(composeBar(m, 'ctx', pref, 'lively')).endsWith('52% · 520K')).toBe(true)
+  expect(isActive(m)).toBe(false)
+})
+
+test('a bar entering after the first draw fills in from empty, without a level pulse', () => {
+  const pref = { style: 'blocks', width: 10 }
+  const m = createMotion()
+  observe(m, 'five', { percent: 60, resetsAtMs: null }, pref, 'lively', true)
+  expect(cellText(composeBar(m, 'five', pref, 'lively')).endsWith(' 0%')).toBe(true)
+  expect(m.bars.five.pulse).toBeNull()
+  expect(isActive(m)).toBe(true)
+  const last = frames(m, pref, 'lively', 80, 'five').at(-1)!
+  expect(cellText(last)).toBe('██████░░░░ 60%')
+  expect(m.bars.five.pulse).toBeNull()
+
+  // Without the entrance flag the first value is taken silently, as before.
+  const silent = createMotion()
+  observe(silent, 'five', { percent: 60, resetsAtMs: null }, pref, 'lively')
+  expect(cellText(composeBar(silent, 'five', pref, 'lively'))).toBe('██████░░░░ 60%')
+  expect(isActive(silent)).toBe(false)
+})
+
+test('a ctx rise past 80 pulses hot; the same rise on a rate window does not', () => {
+  const pref = { style: 'blocks', width: 10 }
+  expect(moved(pref, 70, 85).bars.ctx.pulse).toMatchObject({ kind: 'level', isHot: true })
+  expect(moved(pref, 70, 85, 'lively', 'five').bars.five.pulse).toMatchObject({ kind: 'level', isHot: false })
+  expect(moved(pref, 30, 60).bars.ctx.pulse).toMatchObject({ kind: 'level', isHot: false })
+})
+
+test('Off takes the tokens at once', () => {
+  const pref = { style: 'blocks', width: 10 }
+  const m = createMotion()
+  observe(m, 'ctx', { percent: 12, resetsAtMs: null, tokens: 120_000 }, pref, 'lively')
+  observe(m, 'ctx', { percent: 52, resetsAtMs: null, tokens: 520_000 }, pref, 'off')
+  expect(m.bars.ctx.tokens).toEqual({ target: 520_000, shown: 520_000, flash: null })
+  expect(isActive(m)).toBe(false)
+})
+
 test('a rate window that resets is fresh, never a glint; ctx is never a reset', () => {
   const pref = { style: 'blocks', width: 10 }
   const m = createMotion()
