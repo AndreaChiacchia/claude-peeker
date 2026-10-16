@@ -4,7 +4,7 @@ import { GLINT_UP, mixColor } from '../hooks/cells'
 import type { Cell } from '../hooks/cells'
 import { advance, composeBar, createMotion, isActive, observe } from '../hooks/motion'
 import type { MotionState } from '../hooks/motion'
-import { STYLES, drawBar, normalizePrefs } from '../hooks/styles'
+import { STYLES, drawBar, normalizeSettings } from '../hooks/styles'
 import type { BarPref, Motion } from '../types'
 
 const GREEN = 0x5fff00
@@ -32,11 +32,36 @@ function frames(m: MotionState, pref: BarPref, level: 'lively' | 'subtle', last:
   return out
 }
 
-test('motion is read back from the store, and defaults to lively', () => {
-  expect(normalizePrefs({}).motion).toBe('lively')
-  expect(normalizePrefs({ motion: 'subtle' }).motion).toBe('subtle')
-  expect(normalizePrefs({ motion: 'off' }).motion).toBe('off')
-  expect(normalizePrefs({ motion: 'wild' }).motion).toBe('lively')
+test('motion comes from the setting, and defaults to lively', () => {
+  expect(normalizeSettings({}).motion).toBe('lively')
+  expect(normalizeSettings({ motion: 'subtle' }).motion).toBe('subtle')
+  expect(normalizeSettings({ motion: 'off' }).motion).toBe('off')
+  expect(normalizeSettings({ motion: 'wild' }).motion).toBe('lively')
+})
+
+test('a growing blocks bar eases its tip by eighths; at rest it is whole cells', () => {
+  const pref = { style: 'blocks', width: 10 }
+  const m = moved(pref, 12, 20)
+  const cells = composeBar(m, 'ctx', pref, 'lively').slice(0, 10)
+  expect(cells.some(c => c.cp >= 0x2589 && c.cp <= 0x258f)).toBe(true)
+  const last = frames(m, pref, 'lively', 80).at(-1) ?? []
+  expect(cellText(last).startsWith('██░░░░░░░░ 20%')).toBe(true)
+})
+
+test('a heavy bar draws its track in the dim heavy gray', () => {
+  const pref = { style: 'heavy', width: 5 }
+  const m = createMotion()
+  observe(m, 'ctx', { percent: 40, resetsAtMs: null }, pref, 'lively')
+  const cells = composeBar(m, 'ctx', pref, 'lively')
+  expect(cells.slice(0, 2).map(c => [c.cp, c.fg])).toEqual([
+    [0x2501, GREEN],
+    [0x2501, GREEN],
+  ])
+  expect(cells.slice(2, 5).map(c => [c.cp, c.fg])).toEqual([
+    [0x2501, 0x444444],
+    [0x2501, 0x444444],
+    [0x2501, 0x444444],
+  ])
 })
 
 test('with nothing moving a bar is exactly the plain bar, in every style and width', () => {

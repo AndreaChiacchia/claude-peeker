@@ -1,7 +1,72 @@
 {
   "name": "claudepeeker",
   "version": "0.4.1",
-  "description": "Your status line, drawn by a mod above the prompt: model, effort, branch, context and rate-limit bars, clickable reset times and restylable bars",
+  "description": "Your status line, drawn by a mod above the prompt: model, effort, branch, context and rate-limit bars, with bar styles and reset time formats in /config",
   "author": { "name": "AndreaChiacchia", "url": "https://github.com/AndreaChiacchia" },
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "ctxStyle": {
+      "type": "string",
+      "title": "Context bar style",
+      "description": "The look of the context bar (ctx). blocks: █ on ░, the tip easing by eighths of a cell while the bar grows. parallelogram: ▰ on ▱. shade: ▓ on ░. solid: █ on a gray █. smooth: █ on ░, the edge always by eighths of a cell. smooth-bare: the same on blank. line: ━ on ─. heavy: a bold ━ on a dim ━. dots: ● on ○. squares: ■ on □. diamonds: ◆ on ◇. braille: ⣿ on ⣀. ascii: # on - between [ and ], for fonts without these glyphs. arrow: ===> between [ and ]. pie: one glyph, ○ ◔ ◑ ◕ ●. spark: one glyph, ▁ to █. none: no bar, the percent alone.",
+      "default": "parallelogram",
+      "options": ["blocks", "parallelogram", "shade", "solid", "smooth", "smooth-bare", "line", "heavy", "dots", "squares", "diamonds", "braille", "ascii", "arrow", "pie", "spark", "none"]
+    },
+    "ctxWidth": {
+      "type": "string",
+      "title": "Context bar width",
+      "description": "How many cells the context bar takes: 3 to 20. pie, spark and none ignore it.",
+      "default": "5",
+      "options": ["3", "4", "5", "6", "8", "10", "12", "15", "20"]
+    },
+    "fiveStyle": {
+      "type": "string",
+      "title": "5h bar style",
+      "description": "The look of the 5-hour limit bar (5h). blocks: █ on ░, the tip easing by eighths of a cell while the bar grows. parallelogram: ▰ on ▱. shade: ▓ on ░. solid: █ on a gray █. smooth: █ on ░, the edge always by eighths of a cell. smooth-bare: the same on blank. line: ━ on ─. heavy: a bold ━ on a dim ━. dots: ● on ○. squares: ■ on □. diamonds: ◆ on ◇. braille: ⣿ on ⣀. ascii: # on - between [ and ], for fonts without these glyphs. arrow: ===> between [ and ]. pie: one glyph, ○ ◔ ◑ ◕ ●. spark: one glyph, ▁ to █. none: no bar, the percent alone.",
+      "default": "blocks",
+      "options": ["blocks", "parallelogram", "shade", "solid", "smooth", "smooth-bare", "line", "heavy", "dots", "squares", "diamonds", "braille", "ascii", "arrow", "pie", "spark", "none"]
+    },
+    "fiveWidth": {
+      "type": "string",
+      "title": "5h bar width",
+      "description": "How many cells the 5-hour bar takes: 3 to 20. pie, spark and none ignore it.",
+      "default": "5",
+      "options": ["3", "4", "5", "6", "8", "10", "12", "15", "20"]
+    },
+    "weekStyle": {
+      "type": "string",
+      "title": "Weekly bar style",
+      "description": "The look of the weekly limit bar (wk). blocks: █ on ░, the tip easing by eighths of a cell while the bar grows. parallelogram: ▰ on ▱. shade: ▓ on ░. solid: █ on a gray █. smooth: █ on ░, the edge always by eighths of a cell. smooth-bare: the same on blank. line: ━ on ─. heavy: a bold ━ on a dim ━. dots: ● on ○. squares: ■ on □. diamonds: ◆ on ◇. braille: ⣿ on ⣀. ascii: # on - between [ and ], for fonts without these glyphs. arrow: ===> between [ and ]. pie: one glyph, ○ ◔ ◑ ◕ ●. spark: one glyph, ▁ to █. none: no bar, the percent alone.",
+      "default": "blocks",
+      "options": ["blocks", "parallelogram", "shade", "solid", "smooth", "smooth-bare", "line", "heavy", "dots", "squares", "diamonds", "braille", "ascii", "arrow", "pie", "spark", "none"]
+    },
+    "weekWidth": {
+      "type": "string",
+      "title": "Weekly bar width",
+      "description": "How many cells the weekly bar takes: 3 to 20. pie, spark and none ignore it.",
+      "default": "5",
+      "options": ["3", "4", "5", "6", "8", "10", "12", "15", "20"]
+    },
+    "fiveTime": {
+      "type": "string",
+      "title": "5h reset time",
+      "description": "How the 5-hour reset time reads. relative: the time left (2h13m). clock: the local time (13:50, or Fri 05:00 when it is not today). date: the day, month and time (10/10 13:50). A click on the time in the status line steps to the next one.",
+      "default": "relative",
+      "options": ["relative", "clock", "date"]
+    },
+    "weekTime": {
+      "type": "string",
+      "title": "Weekly reset time",
+      "description": "How the weekly reset time reads. relative: the time left (6d17h). clock: the local time (Fri 05:00, or 13:50 when it is today). date: the day, month and time (17/10 05:00). A click on the time in the status line steps to the next one.",
+      "default": "relative",
+      "options": ["relative", "clock", "date"]
+    },
+    "motion": {
+      "type": "string",
+      "title": "Motion",
+      "description": "How the bars move when a figure changes. lively: a glint sweeps the bar, the fill grows and blends its color, the percent and the tokens roll with the changed digits flashing; crossing 50% or 80% pulses the bar, a compaction drains the ctx bar with sparkles, a reset flashes the bar green, and the working dot dims and brightens every half second. subtle: the same, softer, with no sparkles and the dot changing every second. off: a still line, redrawn after each response.",
+      "default": "lively",
+      "options": ["lively", "subtle", "off"]
+    }
+  }
 }

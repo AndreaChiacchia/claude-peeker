@@ -8,14 +8,6 @@ import type { Cell } from '../hooks/cells'
 const NOW = Date.parse('2026-10-10T11:00:00Z')
 const HOUR = 3600_000
 
-const PANE = {
-  plugin: 'claudepeeker',
-  surface: 'terminal',
-  component: 'Pane',
-  requestId: 'peeker-bars',
-  props: { title: 'Bar styles', isFocused: false } as never,
-} as const
-
 const HINT = {
   plugin: 'claudepeeker',
   surface: 'terminal',
@@ -39,6 +31,8 @@ type State = {
   tokens: boolean
   /** The `settings.read` value. */
   settings: unknown
+  /** What `config.set` answers: a deny, or nothing (written). */
+  configAnswer: { deny?: string }
 }
 
 /** What the engine measures for the figures `state` holds now. */
@@ -69,8 +63,11 @@ function world(on: On, stacked: string[] = []) {
     limits: true,
     tokens: true,
     settings: { effortLevel: 'medium', modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } },
+    configAnswer: {},
   }
   const blits: { requestId: string; key: string; cells?: string }[] = []
+  const configSets: { key: string; value: unknown }[] = []
+  const toasts: string[] = []
   const clock = mock.clock(on, { now: NOW })
   // The mod's own key-value store, in memory; the test reads it back through `store`.
   const store = new Map<string, unknown>()
@@ -94,7 +91,16 @@ function world(on: On, stacked: string[] = []) {
     blits.push({ requestId: e.requestId, key: e.key, cells: (e as unknown as { cells?: string }).cells })
     return { value: state.blitAnswer }
   })
-  on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+  on('config.set', (_$, e) => {
+    configSets.push({ key: e.key, value: e.value })
+
+    return (state.configAnswer.deny === undefined ? { value: e.value } : { deny: state.configAnswer.deny }) as never
+  })
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined } as never
+  })
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -128,7 +134,7 @@ function world(on: On, stacked: string[] = []) {
     )
   })
 
-  return { state, blits, clock, store }
+  return { state, blits, clock, store, configSets, toasts }
 }
 
 type World = ReturnType<typeof world>
@@ -222,7 +228,7 @@ test("the status line stays right under the hint, before another mod's rows", as
 })
 
 test('a click on a reset time cycles it, each window on its own', async ($, on) => {
-  world(on)
+  const w = world(on)
   const ui = await $.ui.mount(HINT)
   await ui.press({ key: 'reset-five' })
   expect((await ui.find({ key: 'reset-five' }))?.text).toBe('(15:59)')
@@ -233,22 +239,49 @@ test('a click on a reset time cycles it, each window on its own', async ($, on) 
   expect((await ui.find({ key: 'reset-week' }))?.text).toBe('(Sat 07:00)')
   await ui.press({ key: 'reset-five' })
   expect((await ui.find({ key: 'reset-five' }))?.text).toBe('(2h59m)')
+  expect(w.configSets).toEqual([
+    { key: 'claudepeeker.fiveTime', value: 'clock' },
+    { key: 'claudepeeker.fiveTime', value: 'date' },
+    { key: 'claudepeeker.weekTime', value: 'clock' },
+    { key: 'claudepeeker.fiveTime', value: 'relative' },
+  ])
 })
 
-test('the panel restyles one bar and leaves the others', async ($, on) => {
+test('a refused click puts the time back and says why', async ($, on) => {
+  const w = world(on)
+  w.state.configAnswer = { deny: 'locked by policy' }
+  const ui = await $.ui.mount(HINT)
+  await ui.press({ key: 'reset-five' })
+  expect((await ui.find({ key: 'reset-five' }))?.text).toBe('(2h59m)')
+  expect(w.toasts).toContain('Claude-Peeker: the 5h reset time stays relative: locked by policy')
+})
+
+test('the reset time settings reach the line', { options: { fiveTime: 'clock', weekTime: 'date' } }, async ($, on) => {
   world(on)
-  const pane = await $.ui.mount(PANE)
-  // Blocks steps on to Dots, seven along; back then on again leaves 5h as it was.
-  for (let i = 0; i < 7; i++) await pane.press({ key: 'style-week-next' })
-  await pane.press({ key: 'width-week-next' })
-  await pane.press({ key: 'width-week-next' })
-  await pane.press({ key: 'style-five-prev' })
-  await pane.press({ key: 'style-five-next' })
-  await pane.press({ key: 'time-five' })
   const line = text(await (await $.ui.mount(HINT)).drawn())
-  expect(line).toContain('wk (6d18h) ●○○○○○○○ 1%')
-  expect(line).toContain('5h (15:59) █░░░░ 6%')
-  expect(line).toContain('ctx (1M) ▰▱▱▱▱ 12%')
+  expect(line).toContain('5h (15:59)')
+  expect(line).toContain('wk (17/10 07:00)')
+})
+
+test(
+  'the bar settings reach the line, each bar on its own',
+  { options: { weekStyle: 'dots', weekWidth: '8', fiveTime: 'clock' } },
+  async ($, on) => {
+    world(on)
+    const line = text(await (await $.ui.mount(HINT)).drawn())
+    expect(line).toContain('wk (6d18h) ●○○○○○○○ 1%')
+    expect(line).toContain('5h (15:59) █░░░░ 6%')
+    expect(line).toContain('ctx (1M) ▰▱▱▱▱ 12%')
+  },
+)
+
+test('a heavy ctx bar draws ━ on a dim ━', { options: { ctxStyle: 'heavy' } }, async ($, on) => {
+  world(on)
+  const drawn = await (await $.ui.mount(HINT)).drawn()
+  expect(text(drawn)).toContain('ctx (1M) ━━━━━ 12%')
+  const cells = decodeCells(String(raster(drawn, 'peeker-ctx')?.props?.cells ?? ''))
+  expect(cells[0]?.fg).toBe(0x5fff00)
+  expect(cells.slice(1, 5).map(c => c.fg)).toEqual([0x444444, 0x444444, 0x444444, 0x444444])
 })
 
 test('the first draw is silent', async ($, on) => {
@@ -305,11 +338,8 @@ test('a rate window that resets flashes fresh', async ($, on) => {
   expect(text(await ui.drawn())).toContain('✦ fresh')
 })
 
-test('Off draws today\'s line and moves nothing', async ($, on) => {
+test('Off draws today\'s line and moves nothing', { options: { motion: 'off' } }, async ($, on) => {
   const w = world(on)
-  const pane = await $.ui.mount(PANE)
-  await pane.press({ key: 'motion-next' })
-  await pane.press({ key: 'motion-next' })
   const ui = await $.ui.mount(HINT)
   const drawn = await ui.drawn()
   expect(rasters(drawn).length).toBe(0)
@@ -320,17 +350,6 @@ test('Off draws today\'s line and moves nothing', async ($, on) => {
   await ui.drawn()
   await w.clock.advance(2000)
   expect(w.blits.length).toBe(0)
-  expect((w.store.get('prefs') as { motion?: string } | undefined)?.motion).toBe('off')
-})
-
-test('the panel steps the motion: Lively, Subtle, Off', async ($, on) => {
-  world(on)
-  const pane = await $.ui.mount(PANE)
-  expect(text(await pane.drawn())).toContain('Motion Lively ')
-  expect((await pane.find({ key: 'motion-prev' }))?.text).toBe('‹')
-  expect((await pane.find({ key: 'motion-next' }))?.text).toBe('›')
-  await pane.press({ key: 'motion-next' })
-  expect(text(await pane.drawn())).toContain('Motion Subtle ')
 })
 
 test('a slot that refuses its first blits three times is drawn still', async ($, on) => {
@@ -411,11 +430,8 @@ test('the demo plays every effect, then returns silently to real usage', async (
   expect(w.blits.length).toBe(count)
 })
 
-test('under Off the demo still steps the figures, without effects', async ($, on) => {
+test('under Off the demo still steps the figures, without effects', { options: { motion: 'off' } }, async ($, on) => {
   const w = world(on)
-  const pane = await $.ui.mount(PANE)
-  await pane.press({ key: 'motion-next' })
-  await pane.press({ key: 'motion-next' })
   const ui = await $.ui.mount(HINT)
   await ui.drawn()
   const started = await command($, 'demo')
@@ -459,9 +475,21 @@ test('a second demo restarts from the beginning', async ($, on) => {
   expect(w.blits.filter(b => b.key === 'peeker-ctx').length).toBe(count)
 })
 
-test('a bare /peeker still opens the panel', async ($, on) => {
+test('a bare /peeker points to /config', async ($, on) => {
   world(on)
-  expect((await command($, '')).text).toBe('Opened the bar styles panel.')
+  const pointer =
+    "Claude-Peeker's settings are in /config: each bar's style and width, the reset time formats and Motion. A click on a reset time steps its format. /peeker demo plays the motion tour."
+  expect((await command($, '')).text).toBe(pointer)
+  expect((await command($, '5h')).text).toBe(pointer)
+})
+
+test('no setting is written to the store', async ($, on) => {
+  const w = world(on)
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  await ui.press({ key: 'reset-five' })
+  await command($, 'demo')
+  expect(w.store.size).toBe(0)
 })
 
 const GRAY_CELL = 0x585858
@@ -533,11 +561,8 @@ test('a subagent turn changes nothing on the line', async ($, on) => {
   expect(raster(await ui.drawn(), 'peeker-tail')).toBeUndefined()
 })
 
-test('under Off the plain line still shows the time, and nothing is blitted', async ($, on) => {
+test('under Off the plain line still shows the time, and nothing is blitted', { options: { motion: 'off' } }, async ($, on) => {
   const w = world(on)
-  const pane = await $.ui.mount(PANE)
-  await pane.press({ key: 'motion-next' })
-  await pane.press({ key: 'motion-next' })
   const ui = await $.ui.mount(HINT)
   await ui.drawn()
   await startTurn($)

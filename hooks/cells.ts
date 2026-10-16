@@ -5,6 +5,8 @@ export const DEFAULT = 0x01000000
 
 /** The empty cell and frame color: the same gray as `line.ts` GRAY (#585858), hard-coded to keep this file free of imports. */
 export const TRACK = 0x585858
+/** The empty track of the heavy style: a dim heavy line (claudecharter's and claudeticker's TRACK_HEAVY). */
+export const TRACK_HEAVY = 0x444444
 /** The warm white-gold of a rise's glint. */
 export const GLINT_UP = 0xfff5d7
 /** The ice cyan of a fall's glint. */
@@ -26,6 +28,11 @@ export const DOT_FULL = 0x25cf // ●
 /** `#rrggbb` as the number `0xRRGGBB`. */
 export function rgb(hex: string): number {
   return parseInt(hex.replace('#', ''), 16)
+}
+
+/** `0xRRGGBB` as a `#rrggbb` string, the inverse of `rgb`. */
+export function hex(color: number): string {
+  return `#${(color & 0xffffff).toString(16).padStart(6, '0')}`
 }
 
 /** `color` moved `amount` (0..1) toward white, per channel; the terminal default stays as it is. */

@@ -2,7 +2,7 @@
 
 ![version](https://img.shields.io/badge/version-0.4.1-blue)
 
-A mod for the Claude Code CLI that replaces a `statusLine` script with a status line the mod draws itself. It shows the model and effort, the project and git branch, the context window, and the 5-hour and weekly rate limits. You can click the reset times and restyle each bar.
+A mod for the Claude Code CLI that replaces a `statusLine` script with a status line the mod draws itself. It shows the model and effort, the project and git branch, the context window, and the 5-hour and weekly rate limits. Each bar's style and width, the reset time formats and the motion are settings in `/config`; a click on a reset time steps its format.
 
 ```
 ╭──────────────────────────────────────────────────────────────────────────────────────╮
@@ -20,10 +20,10 @@ A mod for the Claude Code CLI that replaces a `statusLine` script with a status 
 - **Git state:** a red `*` after the branch for uncommitted changes, a yellow one for commits not yet pushed.
 - **Context window:** the window size, how full it is and the tokens in it (`29% · 290K`), the count rolling to new values.
 - **Rate limits:** the 5-hour and weekly windows, each with a bar, the time until reset and a pace delta. The delta reads `[+n%]` when you're under an even burn rate and `[-n%]` when you're over it, and is hidden under 5 points.
-- **Clickable reset times:** a click cycles `2h13m` → `13:50` → `10/10 13:50`. A reset that isn't today shows its weekday (`Fri 05:00`). Each window keeps its own format, across sessions too.
-- **Bar styles** (`/peeker`): each bar gets its own style and width. There are 16 styles: Blocks, Parallelogram, Shade, Solid track, Smooth, Smooth bare, Line, Dots, Squares, Diamonds, Braille, ASCII, Arrow, Pie, Spark and Hidden (percent only).
+- **Clickable reset times:** a click cycles `2h13m` → `13:50` → `10/10 13:50` and saves the choice in `/config` (settings `fiveTime`, `weekTime`), so each window keeps its own format. A reset that isn't today shows its weekday (`Fri 05:00`). A click reloads the mod, so a running turn's timer restarts at the next turn.
+- **Bar styles** (settings `ctxStyle`, `fiveStyle`, `weekStyle`, and `ctxWidth`, `fiveWidth`, `weekWidth`): 17 styles, claudeticker's 14 meter styles with the same names and glyphs (claudecharter's heavy among them) plus pie, spark and none.
 - **Colors follow the fill:** green below 50%, yellow from 50%, red from 80%.
-- **Motion:** the bars glint when they change. A warm sweep runs left to right when usage rises; an icy sweep runs right to left when it falls, and the emptied cells fade. The fill grows smoothly and blends its color, and the percent rolls to its new value with the changed digits flashing. Crossing 50% or 80% pulses the bar. A compaction drains the ctx bar with sparkles and shows `↻ −62%` for a moment. A 5h or weekly reset flashes the bar green with `✦ fresh`. A 5h or weekly bar that appears after the first draw fills in from empty. The bars also move after every model response, not only at the end of a turn. Pick Lively (default), Subtle or Off in `/peeker`.
+- **Motion:** the bars glint when they change. A warm sweep runs left to right when usage rises; an icy sweep runs right to left when it falls, and the emptied cells fade. The fill grows smoothly and blends its color, and the percent rolls to its new value with the changed digits flashing. Crossing 50% or 80% pulses the bar. A compaction drains the ctx bar with sparkles and shows `↻ −62%` for a moment. A 5h or weekly reset flashes the bar green with `✦ fresh`. A 5h or weekly bar that appears after the first draw fills in from empty. The bars also move after every model response, not only at the end of a turn. Pick lively (default), subtle or off with the `motion` setting.
 - **Matches claudespotter:** the same dot, token count and time as its subagent rows.
 
 ## Install
@@ -50,31 +50,26 @@ Remove the `statusLine` entry from the same file, or both lines will show.
 
 | Command | What it does |
 |---|---|
-| `/peeker` | Open the bar styles panel |
-| `/peeker 5h` | Cycle the 5-hour reset time's format (same as clicking it) |
-| `/peeker wk` | Cycle the weekly reset time's format |
+| `/peeker` | Say where the settings are (`/config`) |
 | `/peeker demo` | Play a 20-second tour of the bar effects on the status line with made-up figures; `/peeker demo stop` ends it |
 
-The demo uses your Motion choice (with Off the figures change without effects) and goes back to your real usage when it ends.
+The demo uses your Motion setting (with off the figures change without effects) and goes back to your real usage when it ends.
 
-The panel docks beside the transcript. Click `‹` or `›` to step a bar's style or width, or click a reset time to change its format:
+## Settings
 
-```
-ctx  ▰▰▱▱▱ 33%
-    ‹ Parallelogram ›  ‹ 5 cells ›
+Set them in `/config`, or in settings under `pluginConfigs.claudepeeker`. A change applies at once. A click on a reset time changes `fiveTime` or `weekTime` the same way.
 
-5h   █░░░░ 11%
-    ‹ Blocks ›  ‹ 5 cells ›
-
-wk   █░░░░ 1%
-    ‹ Blocks ›  ‹ 5 cells ›
-
-Reset  5h 13:50  wk 17/10 05:00
-Motion  ‹ Lively ›
-[ Reset bars ] [ Close ]
-```
-
-Click `‹` or `›` beside Motion to pick Lively, Subtle or Off.
+| Setting | Values (default first) | Example |
+|---|---|---|
+| `ctxStyle` | `parallelogram`, `blocks`, `shade`, `solid`, `smooth`, `smooth-bare`, `line`, `heavy`, `dots`, `squares`, `diamonds`, `braille`, `ascii`, `arrow`, `pie`, `spark`, `none` | the context bar's look: `▰▰▱▱▱` / `█░░░░` / `━━━━━` |
+| `ctxWidth` | `5`, `3`, `4`, `6`, `8`, `10`, `12`, `15`, `20` | how many cells the context bar takes (pie, spark and none ignore it) |
+| `fiveStyle` | `blocks`, `parallelogram`, `shade`, `solid`, `smooth`, `smooth-bare`, `line`, `heavy`, `dots`, `squares`, `diamonds`, `braille`, `ascii`, `arrow`, `pie`, `spark`, `none` | the 5-hour bar's look: `█░░░░` / `▰▱▱▱▱` / `[==>  ]` |
+| `fiveWidth` | `5`, `3`, `4`, `6`, `8`, `10`, `12`, `15`, `20` | how many cells the 5-hour bar takes |
+| `weekStyle` | `blocks`, `parallelogram`, `shade`, `solid`, `smooth`, `smooth-bare`, `line`, `heavy`, `dots`, `squares`, `diamonds`, `braille`, `ascii`, `arrow`, `pie`, `spark`, `none` | the weekly bar's look: `█░░░░` / `●●○○○` / `◔` |
+| `weekWidth` | `5`, `3`, `4`, `6`, `8`, `10`, `12`, `15`, `20` | how many cells the weekly bar takes |
+| `fiveTime` | `relative`, `clock`, `date` | the 5-hour reset time: `2h13m` / `13:50` / `10/10 13:50` |
+| `weekTime` | `relative`, `clock`, `date` | the weekly reset time: `6d17h` / `Fri 05:00` / `17/10 05:00` |
+| `motion` | `lively`, `subtle`, `off` | glints, growth and rolling figures / the same, softer / a still line |
 
 ## How it works
 
@@ -83,7 +78,7 @@ Click `‹` or `›` beside Motion to pick Lively, Subtle or Off.
 - **Painting:** the dot, the bars and the time are small cell grids repainted in place 20 times a second while a turn runs or an effect plays. Nothing is repainted while the line is idle. Off draws the plain line, which redraws once a second while a turn runs.
 - **Effort:** read from each request the main session sends (`turn.step`), so it is what the model actually runs on. Before the first request, and after a `/model` or `/effort` change until the next request, it comes from settings: the model's own `modelSettings.<model>.effortLevel` first, then `effortLevel`, which is what `/effort` saves.
 - **Git:** read every 10 seconds and after each turn, with `git rev-parse --abbrev-ref HEAD`, `git status --porcelain --untracked-files=no` and `git rev-list --count @{u}..HEAD`.
-- **Your choices:** bar styles, widths and reset time formats are kept in the mod's own store, so they last across sessions.
+- **Your choices:** settings in `/config`, kept by Claude Code in settings.json, so they last across sessions, `/clear` and `/resume`.
 
 ## Limitations
 
@@ -100,16 +95,16 @@ claude plugin test .
 
 | Path | Contents |
 |---|---|
-| `hooks/register.tsx` | the mod: the line under the hint, the `/peeker` panel and command, git and usage reading |
+| `hooks/register.tsx` | the mod: the line under the hint, the reset time clicks, the `/peeker` command, git and usage reading |
 | `hooks/line.ts` | the status line as colored segments |
 | `hooks/format.ts` | figures: pace delta, reset times, model names, token counts, elapsed time and finish marks |
-| `hooks/styles.ts` | the bar styles and the stored preferences |
+| `hooks/styles.ts` | the bar styles and the settings |
 | `hooks/motion.ts` | the bars' motion: what changed, the effects, each frame |
 | `hooks/row.ts` | the dot and turn time of the line: the state glyph, the elapsed time and the finish mark |
 | `hooks/cells.ts` | colors, blending, the cell encoding |
 | `hooks/demo.ts` | the demo's script |
 | `types/index.d.ts` | the mod's state contract |
-| `tests/` | tests for the figures, the bars, the line, the clicks and the panel |
+| `tests/` | tests for the figures, the bars, the line, the clicks and the settings |
 
 ## License
 

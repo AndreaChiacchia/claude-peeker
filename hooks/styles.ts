@@ -1,6 +1,7 @@
-// The progress bar styles, each drawn as runs of fill, track and frame text.
+// The progress bar styles (claudeticker's meter styles plus pie, spark and none), each drawn as runs of fill, track and frame text, and the /config settings.
 
-import type { BarId, BarPref, Motion, Prefs } from '../types'
+import type { BarId, BarPref, Motion, Prefs, TimeMode } from '../types'
+import { TRACK, TRACK_HEAVY } from './cells'
 
 export type BarPart = { kind: 'fill' | 'track' | 'frame'; text: string }
 
@@ -8,9 +9,10 @@ type Cells = { fill: string; track: string; open?: string; close?: string; head?
 
 export type BarStyle = {
   id: string
-  name: string
-  /** One glyph whatever the width: the width picker does not apply. */
+  /** One glyph whatever the width: the width setting does not apply. */
   isGlyph?: boolean
+  /** The track cells' color; TRACK when absent. */
+  trackColor?: number
   draw: (percent: number, width: number) => BarPart[]
 }
 
@@ -68,22 +70,23 @@ function glyph(steps: string): BarStyle['draw'] {
 }
 
 export const STYLES: readonly BarStyle[] = [
-  { id: 'blocks', name: 'Blocks', draw: cells({ fill: '█', track: '░' }) },
-  { id: 'parallelogram', name: 'Parallelogram', draw: cells({ fill: '▰', track: '▱' }) },
-  { id: 'shade', name: 'Shade', draw: cells({ fill: '▓', track: '░' }) },
-  { id: 'solid', name: 'Solid track', draw: cells({ fill: '█', track: '█' }) },
-  { id: 'smooth', name: 'Smooth', draw: smooth('░') },
-  { id: 'smooth-bare', name: 'Smooth, bare', draw: smooth(' ') },
-  { id: 'line', name: 'Line', draw: cells({ fill: '━', track: '─' }) },
-  { id: 'dots', name: 'Dots', draw: cells({ fill: '●', track: '○' }) },
-  { id: 'squares', name: 'Squares', draw: cells({ fill: '■', track: '□' }) },
-  { id: 'diamonds', name: 'Diamonds', draw: cells({ fill: '◆', track: '◇' }) },
-  { id: 'braille', name: 'Braille', draw: cells({ fill: '⣿', track: '⣀' }) },
-  { id: 'ascii', name: 'ASCII', draw: cells({ fill: '#', track: '-', open: '[', close: ']' }) },
-  { id: 'arrow', name: 'Arrow', draw: cells({ fill: '=', track: ' ', head: '>', open: '[', close: ']' }) },
-  { id: 'pie', name: 'Pie', isGlyph: true, draw: glyph('○◔◑◕●') },
-  { id: 'spark', name: 'Spark', isGlyph: true, draw: glyph(' ▁▂▃▄▅▆▇█') },
-  { id: 'none', name: 'Hidden (percent only)', isGlyph: true, draw: () => [] },
+  { id: 'blocks', draw: cells({ fill: '█', track: '░' }) },
+  { id: 'parallelogram', draw: cells({ fill: '▰', track: '▱' }) },
+  { id: 'shade', draw: cells({ fill: '▓', track: '░' }) },
+  { id: 'solid', draw: cells({ fill: '█', track: '█' }) },
+  { id: 'smooth', draw: smooth('░') },
+  { id: 'smooth-bare', draw: smooth(' ') },
+  { id: 'line', draw: cells({ fill: '━', track: '─' }) },
+  { id: 'heavy', draw: cells({ fill: '━', track: '━' }), trackColor: TRACK_HEAVY },
+  { id: 'dots', draw: cells({ fill: '●', track: '○' }) },
+  { id: 'squares', draw: cells({ fill: '■', track: '□' }) },
+  { id: 'diamonds', draw: cells({ fill: '◆', track: '◇' }) },
+  { id: 'braille', draw: cells({ fill: '⣿', track: '⣀' }) },
+  { id: 'ascii', draw: cells({ fill: '#', track: '-', open: '[', close: ']' }) },
+  { id: 'arrow', draw: cells({ fill: '=', track: ' ', head: '>', open: '[', close: ']' }) },
+  { id: 'pie', isGlyph: true, draw: glyph('○◔◑◕●') },
+  { id: 'spark', isGlyph: true, draw: glyph(' ▁▂▃▄▅▆▇█') },
+  { id: 'none', isGlyph: true, draw: () => [] },
 ]
 
 export const WIDTHS: readonly number[] = [3, 4, 5, 6, 8, 10, 12, 15, 20]
@@ -100,13 +103,11 @@ export const DEFAULT_PREFS: Prefs = {
     five: { style: 'blocks', width: 5 },
     week: { style: 'blocks', width: 5 },
   },
-  timeModes: { five: 'rel', week: 'rel' },
+  timeModes: { five: 'relative', week: 'relative' },
   motion: 'lively',
 }
 
 export const MOTIONS: readonly Motion[] = ['lively', 'subtle', 'off']
-
-export const MOTION_LABELS: Record<Motion, string> = { lively: 'Lively', subtle: 'Subtle', off: 'Off' }
 
 export function styleOf(id: string): BarStyle {
   return STYLES.find(style => style.id === id) ?? STYLES[0]!
@@ -116,21 +117,40 @@ export function drawBar(pref: BarPref, percent: number): BarPart[] {
   return styleOf(pref.style).draw(percent, pref.width)
 }
 
-/** A stored value read back over the defaults, so a renamed style or a missing field never breaks a draw. */
-export function normalizePrefs(raw: unknown): Prefs {
-  const value = (raw ?? {}) as Partial<Prefs>
-  const bar = (id: BarId): BarPref => {
-    const one = value.bars?.[id]
-    const style = one && STYLES.some(s => s.id === one.style) ? one.style : DEFAULT_PREFS.bars[id].style
-    const width = one && WIDTHS.includes(one.width) ? one.width : DEFAULT_PREFS.bars[id].width
+/** The color of a bar's track cells: the style's own, else the shared gray. */
+export function trackColorOf(pref: BarPref): number {
+  return styleOf(pref.style).trackColor ?? TRACK
+}
 
-    return { style, width }
+/** The drawing while the fill grows: blocks eases its tip by eighths of a cell, as claudeticker's blocks meter; every other style as at rest. */
+export function drawMoving(pref: BarPref, percent: number): BarPart[] {
+  return styleOf(pref.style).id === 'blocks' ? smooth('░')(percent, pref.width) : drawBar(pref, percent)
+}
+
+/** The /config settings, each falling back to its default when unknown. */
+export function normalizeSettings(options: Record<string, unknown>): Prefs {
+  const bar = (id: BarId, styleKey: string, widthKey: string): BarPref => {
+    const style = options[styleKey]
+    const width = Number(options[widthKey])
+
+    return {
+      style: typeof style === 'string' && STYLES.some(s => s.id === style) ? style : DEFAULT_PREFS.bars[id].style,
+      width: WIDTHS.includes(width) ? width : DEFAULT_PREFS.bars[id].width,
+    }
   }
-  const mode = (m: unknown) => (m === 'clock' || m === 'date' ? m : 'rel')
+  const time = (key: string): TimeMode => {
+    const mode = options[key]
+
+    return mode === 'relative' || mode === 'clock' || mode === 'date' ? mode : 'relative'
+  }
 
   return {
-    bars: { ctx: bar('ctx'), five: bar('five'), week: bar('week') },
-    timeModes: { five: mode(value.timeModes?.five), week: mode(value.timeModes?.week) },
-    motion: MOTIONS.find(m => m === value.motion) ?? DEFAULT_PREFS.motion,
+    bars: {
+      ctx: bar('ctx', 'ctxStyle', 'ctxWidth'),
+      five: bar('five', 'fiveStyle', 'fiveWidth'),
+      week: bar('week', 'weekStyle', 'weekWidth'),
+    },
+    timeModes: { five: time('fiveTime'), week: time('weekTime') },
+    motion: MOTIONS.find(m => m === options.motion) ?? DEFAULT_PREFS.motion,
   }
 }

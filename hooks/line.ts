@@ -1,9 +1,10 @@
 // The status line as groups of colored segments, ported from statusline-command.js.
 
 import type { BarId, GitInfo, Prefs } from '../types'
+import { hex } from './cells'
 import { doneText, formatElapsed, formatTokens, modelLabel, resetLabel, tone } from './format'
 import type { FinishWord, Tone, WindowFigures } from './format'
-import { drawBar, styleOf } from './styles'
+import { drawBar, styleOf, trackColorOf } from './styles'
 
 // The old script's ANSI 256 colors, as the xterm palette's hex.
 export const ORANGE = '#ffaf00' // 214
@@ -53,9 +54,10 @@ export type LineData = {
 
 function bar(prefs: Prefs, id: BarId, percent: number, tokens?: number | null): Segment[] {
   const col = TONES[tone(percent)]
+  const track = hex(trackColorOf(prefs.bars[id]))
   const cells: Segment[] = drawBar(prefs.bars[id], percent).map(part => ({
     text: part.text,
-    color: part.kind === 'fill' ? col : GRAY,
+    color: part.kind === 'fill' ? col : part.kind === 'track' ? track : GRAY,
     piece: id,
   }))
   const figure: Segment = { text: `${percent}%`, color: col, piece: id }

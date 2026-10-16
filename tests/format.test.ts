@@ -12,7 +12,7 @@ import {
   windowFigures,
   wordForReason,
 } from '../hooks/format'
-import { STYLES, drawBar, filledCells, normalizePrefs } from '../hooks/styles'
+import { DEFAULT_PREFS, STYLES, drawBar, filledCells, normalizeSettings } from '../hooks/styles'
 
 const HOUR = 3600_000
 // Sat 10 Oct 2026, 11:00 UTC; Italy is UTC+2 (120 minutes east).
@@ -27,20 +27,20 @@ test('model ids read as the old status line showed them', () => {
   expect(modelLabel('Opus 5.5')).toBe('Opus 5.5')
 })
 
-test('reset time cycles rel, clock, date in short notation', () => {
+test('reset time cycles relative, clock, date in short notation', () => {
   const five = NOW + 2 * HOUR + 56 * 60_000
-  expect(resetLabel(five, NOW, 'rel', ROME)).toBe('2h56m')
+  expect(resetLabel(five, NOW, 'relative', ROME)).toBe('2h56m')
   expect(resetLabel(five, NOW, 'clock', ROME)).toBe('15:56')
   expect(resetLabel(five, NOW, 'date', ROME)).toBe('10/10 15:56')
 
   const week = Date.parse('2026-10-16T03:00:00Z')
-  expect(resetLabel(week, NOW, 'rel', ROME)).toBe('5d16h')
+  expect(resetLabel(week, NOW, 'relative', ROME)).toBe('5d16h')
   expect(resetLabel(week, NOW, 'clock', ROME)).toBe('Fri 05:00')
   expect(resetLabel(week, NOW, 'date', ROME)).toBe('16/10 05:00')
 
-  expect(nextTimeMode('rel')).toBe('clock')
+  expect(nextTimeMode('relative')).toBe('clock')
   expect(nextTimeMode('clock')).toBe('date')
-  expect(nextTimeMode('date')).toBe('rel')
+  expect(nextTimeMode('date')).toBe('relative')
 })
 
 test('a reset past local midnight is shown with its weekday', () => {
@@ -99,6 +99,10 @@ test('bars keep the old cell count and every style draws its width', () => {
     { kind: 'track', text: '░░░░' },
   ])
   expect(drawBar({ style: 'parallelogram', width: 5 }, 100)).toEqual([{ kind: 'fill', text: '▰▰▰▰▰' }])
+  expect(drawBar({ style: 'heavy', width: 5 }, 40)).toEqual([
+    { kind: 'fill', text: '━━' },
+    { kind: 'track', text: '━━━' },
+  ])
   for (const style of STYLES) {
     if (style.isGlyph) continue
     for (const percent of [0, 1, 37, 50, 99, 100]) {
@@ -109,9 +113,10 @@ test('bars keep the old cell count and every style draws its width', () => {
   }
 })
 
-test('stored prefs are read back over the defaults', () => {
-  const prefs = normalizePrefs({ bars: { five: { style: 'gone', width: 7 } }, timeModes: { week: 'date' } })
+test('settings fall back to their defaults', () => {
+  const prefs = normalizeSettings({ fiveStyle: 'gone', fiveWidth: '7', ctxWidth: '12', weekTime: 'date' })
   expect(prefs.bars.five).toEqual({ style: 'blocks', width: 5 })
-  expect(prefs.bars.ctx).toEqual({ style: 'parallelogram', width: 5 })
-  expect(prefs.timeModes).toEqual({ five: 'rel', week: 'date' })
+  expect(prefs.bars.ctx).toEqual({ style: 'parallelogram', width: 12 })
+  expect(prefs.timeModes).toEqual({ five: 'relative', week: 'date' })
+  expect(normalizeSettings({})).toEqual(DEFAULT_PREFS)
 })

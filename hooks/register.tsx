@@ -1,13 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, RenderElement, RenderNode, Timer } from 'claude-code'
 
-import type { BarId, GitInfo, Motion, Prefs } from '../types'
+import type { BarId, GitInfo, Motion, Prefs, TimeMode } from '../types'
 import { encodeCells } from './cells'
 import type { Cell } from './cells'
 import { DEMO_END_MS, DEMO_TICK_MS, demoLine, isDemoChangeAt } from './demo'
-import { effortLabel, nextTimeMode, resetLabel, tone, windowFigures, wordForReason } from './format'
+import { effortLabel, nextTimeMode, tone, windowFigures, wordForReason } from './format'
 import type { FinishWord } from './format'
-import { GRAY, TONES, lineGroups } from './line'
+import { lineGroups } from './line'
 import type { LineData, PieceId, Segment, TurnView } from './line'
 import {
   FINISH_MS,
@@ -23,21 +23,8 @@ import {
 import type { MotionState } from './motion'
 import { composeDot, composeTail, markDone, tailWidth } from './row'
 import type { DotState, TailState } from './row'
-import {
-  BARS,
-  DEFAULT_PREFS,
-  MOTIONS,
-  MOTION_LABELS,
-  STYLES,
-  WIDTHS,
-  drawBar,
-  normalizePrefs,
-  styleOf,
-} from './styles'
-import type { BarPart } from './styles'
+import { DEFAULT_PREFS, normalizeSettings } from './styles'
 
-const PANE = 'peeker-bars'
-const STORE_KEY = 'prefs'
 const TICK_MS = 30_000
 const GIT_EVERY_MS = 10_000
 /** The plain line redraws this often while a turn runs, so the elapsed time ticks. */
@@ -48,7 +35,6 @@ const RASTER_PREFIX = 'peeker-'
 const MAX_REFUSED_MOUNTS = 3
 const BAR_IDS: readonly BarId[] = ['ctx', 'five', 'week']
 
-const prefs = atom({ plugin: 'claudepeeker', key: 'prefs' } as const, DEFAULT_PREFS)
 const git = atom({ plugin: 'claudepeeker', key: 'git' } as const, null)
 
 type Ui = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
@@ -64,10 +50,10 @@ function settingsEffort(settings: unknown, model: string): string | null {
   return typeof s.effortLevel === 'string' ? s.effortLevel : null
 }
 
-async function savePrefs($: EngineInterface, change: (p: Prefs) => Prefs): Promise<void> {
-  await update($, prefs, change)
-  await $.store.set(STORE_KEY, await read($, prefs))
-}
+/** The /config settings, read in `register`: a module variable, so /clear and /resume keep them; a /config change reloads the module. */
+let settings: Prefs = DEFAULT_PREFS
+/** True while a click's reset time format is being written to /config: further clicks wait for it. */
+let isTimeWriting = false
 
 // State of the running module. It is lost on a reload by design: the next render rebuilds it.
 // `register` resets it, so a module instance shared by several loads starts each one clean.
@@ -224,8 +210,37 @@ async function step($: EngineInterface): Promise<void> {
   }
 }
 
-const cycleTime = ($: EngineInterface, id: 'five' | 'week') =>
-  savePrefs($, old => ({ ...old, timeModes: { ...old.timeModes, [id]: nextTimeMode(old.timeModes[id]) } }))
+/** Sets one reset time's format in the module variable and redraws the line. */
+function setTimeMode($: EngineInterface, id: 'five' | 'week', mode: TimeMode): void {
+  settings = { ...settings, timeModes: { ...settings.timeModes, [id]: mode } }
+  $.ui.invalidate('ui.render')
+}
+
+/**
+ * A click on a reset time: the next format shows at once and is written to its /config row; the write
+ * reloads the module, which then reads it from its options.
+ */
+async function cycleTime($: EngineInterface, id: 'five' | 'week'): Promise<void> {
+  if (isTimeWriting) return
+  const before = settings.timeModes[id]
+  const next = nextTimeMode(before)
+  setTimeMode($, id, next)
+  isTimeWriting = true
+  const key = id === 'five' ? 'claudepeeker.fiveTime' : 'claudepeeker.weekTime'
+  const label = id === 'five' ? '5h' : 'weekly'
+  try {
+    const r = await $.config.set({ key, value: next })
+    if (r.deny !== undefined) {
+      if (settings.timeModes[id] === next) setTimeMode($, id, before)
+      $.ui.toast(`Claude-Peeker: the ${label} reset time stays ${before}: ${r.deny}`)
+    }
+  } catch {
+    if (settings.timeModes[id] === next) setTimeMode($, id, before)
+    $.ui.toast(`Claude-Peeker: could not save the ${label} reset time format in /config.`)
+  } finally {
+    isTimeWriting = false
+  }
+}
 
 /** The main loop's turn as the line shows it at `now`: working, the done mark for `FINISH_MS`, then the last turn's time. */
 function turnView(now: number): TurnView | null {
@@ -237,17 +252,16 @@ function turnView(now: number): TurnView | null {
 }
 
 async function lineData($: EngineInterface): Promise<LineData> {
-  const [usage, model, root, settings, p, g, now] = await Promise.all([
+  const [usage, model, root, engineSettings, g, now] = await Promise.all([
     $.session.usage(),
     $.session.model(),
     $.session.root(),
     $.settings.read(),
-    read($, prefs),
     read($, git),
     $.clock.now(),
   ])
   // What the main loop's last request sent wins over settings, for as long as the model and settings are those it was sent under.
-  const settingsValue = settingsEffort(settings, model)
+  const settingsValue = settingsEffort(engineSettings, model)
   const basis = `${model}\n${settingsValue ?? ''}`
   lastBasis = basis
   const fromStep = mainStep !== null && mainStep.basis === basis ? mainStep : null
@@ -267,7 +281,7 @@ async function lineData($: EngineInterface): Promise<LineData> {
         : null,
     five: windowFigures(usage.rateLimits.find(w => w.kind === 'five_hour'), 5, now),
     week: windowFigures(usage.rateLimits.find(w => w.kind === 'seven_day'), 168, now),
-    prefs: p,
+    prefs: settings,
     now,
     offsetMin: -new Date(now).getTimezoneOffset(),
     turn: turnView(now),
@@ -315,17 +329,6 @@ function stacked(drawn: RenderElement): RenderNode[] {
   }
 
   return [drawn]
-}
-
-function partColor(part: BarPart, percent: number): string {
-  return part.kind === 'fill' ? TONES[tone(percent)] : GRAY
-}
-
-/** The item `by` steps from `at`, wrapping round the list. */
-function cycle<T>(list: readonly T[], at: T, by: 1 | -1): T {
-  const i = list.indexOf(at)
-
-  return list[(i + by + list.length) % list.length] ?? at
 }
 
 /**
@@ -385,14 +388,16 @@ function drawLine(
   )
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  settings = normalizeSettings(options)
   // A fresh load starts from a clean state.
   stopTimer()
   stopStill()
   demo?.timer.cancel()
   demo = null
   motion = createMotion()
-  level = 'lively'
+  level = settings.motion
+  isTimeWriting = false
   isBlitting = false
   site = null
   lastBlit.clear()
@@ -407,14 +412,14 @@ export const register: Register = on => {
   lastBasis = null
 
   on('session.start', async ($, e, next) => {
-    const stored = await $.store.get(STORE_KEY)
-    if (stored !== undefined) await update($, prefs, () => normalizePrefs(stored))
     await $.command.register({
       name: 'peeker',
-      description: 'Pick the style and width of each status line bar, and how the bars move',
-      argumentHint: '[5h | wk | demo]',
+      description: "Play the status line's motion demo; the settings are in /config",
+      argumentHint: '[demo | demo stop]',
     })
     $.ui.status(undefined)
+    // The old, now unused store key: dropped (the settings live in /config).
+    void $.store.delete('prefs').catch(() => undefined)
     $.clock.every(TICK_MS, () => $.ui.invalidate('ui.render'))
     $.clock.every(GIT_EVERY_MS, () => void refreshGit($))
     void refreshGit($)
@@ -428,6 +433,8 @@ export const register: Register = on => {
     primed = false
     mainStep = null
     lastBasis = null
+    // A module reloaded by a /config change redraws at once.
+    $.ui.invalidate('ui.render')
 
     return next(e)
   })
@@ -481,12 +488,12 @@ export const register: Register = on => {
     const arg = e.args.trim()
     if (arg === 'demo') {
       await startDemo($)
-      const off = (await read($, prefs)).motion === 'off'
+      const off = settings.motion === 'off'
 
       return {
         text:
           'Playing the motion demo for 20 s on the status line, with made-up figures. /peeker demo stop ends it.' +
-          (off ? ' Motion is Off, so the figures change without effects: pick Lively or Subtle in /peeker to see them.' : ''),
+          (off ? ' Motion is Off, so the figures change without effects: set Motion to lively or subtle in /config to see them.' : ''),
       }
     }
     if (arg === 'demo stop') {
@@ -495,14 +502,11 @@ export const register: Register = on => {
 
       return { text: 'Stopped the demo: the line shows your real usage again.' }
     }
-    if (arg === '5h' || arg === 'wk') {
-      const id = arg === '5h' ? 'five' : 'week'
-      await cycleTime($, id)
-      return { text: `The ${arg} reset time now reads ${(await read($, prefs)).timeModes[id]}.` }
-    }
-    await $.ui.open({ id: PANE, title: 'Bar styles', focus: true, closeOnEscape: true })
 
-    return { text: 'Opened the bar styles panel.' }
+    return {
+      text:
+        "Claude-Peeker's settings are in /config: each bar's style and width, the reset time formats and Motion. A click on a reset time steps its format. /peeker demo plays the motion tour.",
+    }
   })
 
   // The hint line under the prompt, kept as the engine draws it (its pills stay
@@ -606,93 +610,6 @@ export const register: Register = on => {
         {line}
         {below}
       </ui.Box>
-    )
-  })
-
-  // The panel: per bar, its live preview and ‹ › arrows stepping its style and width.
-  // Buttons, not Selects: a Button takes a click anywhere on it, a Select only on its caret.
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const [p, usage, now] = await Promise.all([read($, prefs), $.session.usage(), $.clock.now()])
-    const five = windowFigures(usage.rateLimits.find(w => w.kind === 'five_hour'), 5, now)
-    const week = windowFigures(usage.rateLimits.find(w => w.kind === 'seven_day'), 168, now)
-    const live: Record<BarId, number> = {
-      ctx: Math.round(usage.context.percent ?? 0),
-      five: five?.percent ?? 0,
-      week: week?.percent ?? 0,
-    }
-    const offsetMin = -new Date(now).getTimezoneOffset()
-    const when = (id: 'five' | 'week', at: number | null | undefined) =>
-      at == null ? '–' : resetLabel(at, now, p.timeModes[id], offsetMin)
-    const setBar = (id: BarId, change: Partial<Prefs['bars'][BarId]>) =>
-      savePrefs($, old => ({ ...old, bars: { ...old.bars, [id]: { ...old.bars[id], ...change } } }))
-    const preview = (id: BarId) => (
-      <Text>
-        {drawBar(p.bars[id], live[id]).map(part => (
-          <Text color={partColor(part, live[id])}>{part.text}</Text>
-        ))}
-        <Text color={TONES[tone(live[id])]}> {live[id]}%</Text>
-      </Text>
-    )
-    const stepper = (key: string, value: string, step: (by: 1 | -1) => void, isOff = false) => (
-      <Box flexDirection="row" flexShrink={0}>
-        <Button key={`${key}-prev`} plain dimColor={isOff} onPress={() => step(-1)}>
-          ‹
-        </Button>
-        <Text dimColor={isOff}> {value} </Text>
-        <Button key={`${key}-next`} plain dimColor={isOff} onPress={() => step(1)}>
-          ›
-        </Button>
-      </Box>
-    )
-
-    return (
-      <Box flexDirection="column">
-        {BARS.map(({ id, label }) => {
-          const style = styleOf(p.bars[id].style)
-          return (
-            <Box flexDirection="column" marginBottom={1}>
-              <Box flexDirection="row">
-                <Text bold>{label.padEnd(4)}</Text>
-                {preview(id)}
-              </Box>
-              <Box flexDirection="row" flexWrap="wrap" columnGap={2} paddingLeft={4}>
-                {stepper(`style-${id}`, style.name, by => setBar(id, { style: cycle(STYLES, style, by).id }))}
-                {stepper(
-                  `width-${id}`,
-                  style.isGlyph ? '1 cell' : `${p.bars[id].width} cells`,
-                  by => setBar(id, { width: cycle(WIDTHS, p.bars[id].width, by) }),
-                  style.isGlyph,
-                )}
-              </Box>
-            </Box>
-          )
-        })}
-        <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
-          <Text bold>Reset</Text>
-          <Button key="time-five" plain onPress={() => cycleTime($, 'five')}>
-            {`5h ${when('five', five?.resetsAtMs)}`}
-          </Button>
-          <Button key="time-week" plain onPress={() => cycleTime($, 'week')}>
-            {`wk ${when('week', week?.resetsAtMs)}`}
-          </Button>
-        </Box>
-        <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
-          <Text bold>Motion</Text>
-          {stepper('motion', MOTION_LABELS[p.motion], by =>
-            savePrefs($, old => ({ ...old, motion: cycle(MOTIONS, old.motion, by) })),
-          )}
-        </Box>
-        <Box flexDirection="row" marginTop={1} columnGap={1}>
-          <Button key="reset" onPress={() => savePrefs($, old => ({ ...old, bars: DEFAULT_PREFS.bars }))}>
-            Reset bars
-          </Button>
-          <Button key="close" role="dismiss" onPress={() => $.ui.close({ id: PANE })}>
-            Close
-          </Button>
-        </Box>
-        <Text dimColor>Click ‹ › or a time to change it.</Text>
-      </Box>
     )
   })
 }

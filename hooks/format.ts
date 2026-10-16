@@ -13,10 +13,10 @@ export type WindowFigures = {
 const HOUR = 3600_000
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-export const TIME_MODES: readonly TimeMode[] = ['rel', 'clock', 'date']
+export const TIME_MODES: readonly TimeMode[] = ['relative', 'clock', 'date']
 
 export function nextTimeMode(mode: TimeMode): TimeMode {
-  return TIME_MODES[(TIME_MODES.indexOf(mode) + 1) % TIME_MODES.length] ?? 'rel'
+  return TIME_MODES[(TIME_MODES.indexOf(mode) + 1) % TIME_MODES.length] ?? 'relative'
 }
 
 export function tone(percent: number): Tone {
@@ -79,7 +79,7 @@ const pad = (n: number) => String(n).padStart(2, '0')
  */
 export function resetLabel(resetsAtMs: number, now: number, mode: TimeMode, offsetMin: number): string {
   if (resetsAtMs <= now) return ''
-  if (mode === 'rel') return resetIn(resetsAtMs, now)
+  if (mode === 'relative') return resetIn(resetsAtMs, now)
   const at = new Date(resetsAtMs + offsetMin * 60_000)
   const today = new Date(now + offsetMin * 60_000)
   const clock = `${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())}`
