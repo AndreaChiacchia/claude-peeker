@@ -1,6 +1,6 @@
 {
   "name": "claudepeeker",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Your status line, drawn by a mod above the prompt: model, effort, branch, context and rate-limit bars, with bar styles and reset time formats in /config",
   "author": { "name": "AndreaChiacchia", "url": "https://github.com/AndreaChiacchia" },
   "types": "./types/index.d.ts",
