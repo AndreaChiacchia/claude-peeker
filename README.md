@@ -15,7 +15,7 @@ A mod for the Claude Code CLI that replaces a `statusLine` script with a status 
 ## Features
 
 - **The status line, under the prompt's hint line:** `● [model ·effort] · project/branch · ctx · 5h · wk · time`, in the colors of the classic ANSI status line.
-- **A state dot:** lavender while Claude works, blinking in Lively and alternating its color in Subtle; gray when idle. It pulses red when the context crosses 80% (Lively).
+- **A state dot:** lavender while Claude works, dimming and brightening every half second in Lively and every second in Subtle; gray when idle. It pulses red when the context crosses 80% (Lively).
 - **Turn time:** ticks while a turn runs. When the turn ends it shows `✦ done · 6m24s` (or `✗ stopped`, `✗ failed`) for 2 seconds, then the time of the last turn stays in gray until the next turn starts.
 - **Git state:** a red `*` after the branch for uncommitted changes, a yellow one for commits not yet pushed.
 - **Context window:** the window size, how full it is and the tokens in it (`29% · 290K`), the count rolling to new values.

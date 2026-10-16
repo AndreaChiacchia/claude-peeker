@@ -2,7 +2,7 @@ import type { On, TurnStepChunk, TurnStepResult } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { decodeCells } from '../hooks/cells'
+import { LIVE, TRACK, decodeCells, mixColor } from '../hooks/cells'
 import type { Cell } from '../hooks/cells'
 
 const NOW = Date.parse('2026-10-10T11:00:00Z')
@@ -466,7 +466,7 @@ test('a bare /peeker still opens the panel', async ($, on) => {
 
 const GRAY_CELL = 0x585858
 
-test('a main turn blinks the dot and ticks the time', async ($, on) => {
+test('a main turn dims the dot and ticks the time', async ($, on) => {
   const w = world(on)
   const ui = await $.ui.mount(HINT)
   await ui.drawn()
@@ -475,9 +475,10 @@ test('a main turn blinks the dot and ticks the time', async ($, on) => {
   expect(text(raster(drawn, 'peeker-tail'))).toBe('0s')
 
   await w.clock.advance(1200)
-  const dotCps = w.blits.filter(b => b.key === 'peeker-dot').flatMap(b => decodeCells(b.cells ?? '').map(c => c.cp))
-  expect(dotCps).toContain(0x25cf)
-  expect(dotCps).toContain(0x25cb)
+  const dotCells = w.blits.filter(b => b.key === 'peeker-dot').flatMap(b => decodeCells(b.cells ?? ''))
+  expect(dotCells.every(c => c.cp === 0x25cf)).toBe(true)
+  expect(dotCells.map(c => c.fg)).toContain(LIVE)
+  expect(dotCells.map(c => c.fg)).toContain(mixColor(LIVE, TRACK, 0.5))
   const tails = w.blits.filter(b => b.key === 'peeker-tail').map(b => cellText(decodeCells(b.cells ?? '')))
   expect(tails.includes('1s') || text(await ui.drawn()).endsWith('1s')).toBe(true)
 })

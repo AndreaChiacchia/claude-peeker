@@ -55,7 +55,7 @@ export const RESET_SHIFT_MS = 600_000
 export const FINISH_MS = 2000
 /** The done mark's time, in frames. */
 export const DONE_FRAMES = FINISH_MS / FRAME_MS
-/** The Lively working dot blinks every this many frames (0.5 s). */
+/** The Lively working dot dims and brightens every this many frames (0.5 s). */
 export const DOT_BLINK_FRAMES = 10
 /** The Subtle working dot changes color every this many frames (1 s). */
 export const DOT_BREATHE_FRAMES = 20

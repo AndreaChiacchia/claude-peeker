@@ -22,7 +22,6 @@ export const SPARK_HOLLOW = 0x2727 // ✧
 export const COMPACT_MARK = 0x21bb // ↻
 export const MINUS = 0x2212 // −
 export const DOT_FULL = 0x25cf // ●
-export const DOT_EMPTY = 0x25cb // ○
 
 /** `#rrggbb` as the number `0xRRGGBB`. */
 export function rgb(hex: string): number {

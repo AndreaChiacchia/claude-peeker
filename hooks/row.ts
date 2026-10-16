@@ -2,7 +2,6 @@
 
 import {
   DEFAULT,
-  DOT_EMPTY,
   DOT_FULL,
   HOT,
   LIVE,
@@ -40,7 +39,7 @@ export function composeDot(m: MotionState, state: DotState, level: 'lively' | 's
     return glyph(DOT_FULL, mixColor(LIVE, HOT, PULSE_PROFILE[(t - pulse.start) % PULSE_PROFILE.length] ?? 0))
   }
   if (state === 'idle') return glyph(DOT_FULL, TRACK)
-  if (level === 'lively') return glyph(Math.floor(t / DOT_BLINK_FRAMES) % 2 === 0 ? DOT_FULL : DOT_EMPTY, LIVE)
+  if (level === 'lively') return glyph(DOT_FULL, Math.floor(t / DOT_BLINK_FRAMES) % 2 === 0 ? LIVE : mixColor(LIVE, TRACK, 0.5))
 
   return glyph(DOT_FULL, Math.floor(t / DOT_BREATHE_FRAMES) % 2 === 0 ? LIVE : mixColor(LIVE, TRACK, 0.5))
 }

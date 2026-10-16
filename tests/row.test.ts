@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { DEFAULT, DOT_EMPTY, DOT_FULL, HOT, LIVE, PLAIN, SPARK_FULL, SPARK_HOLLOW, TRACK, mixColor } from '../hooks/cells'
+import { DEFAULT, DOT_FULL, HOT, LIVE, PLAIN, SPARK_FULL, SPARK_HOLLOW, TRACK, mixColor } from '../hooks/cells'
 import type { Cell } from '../hooks/cells'
 import { PULSE_PROFILE, createMotion, observe } from '../hooks/motion'
 import { composeDot, composeTail, markDone, tailWidth } from '../hooks/row'
@@ -10,11 +10,12 @@ const GREEN = 0x5fff00
 
 const cellText = (cells: Cell[]): string => cells.map(c => String.fromCodePoint(c.cp)).join('')
 
-test('the working dot blinks in Lively every 10 frames, in lavender', () => {
+test('the working dot in Lively stays full and dims every 10 frames, from lavender', () => {
   const m = createMotion()
   for (let t = 0; t < 20; t++) {
     m.tick = t
-    expect(composeDot(m, 'working', 'lively')).toEqual([{ cp: t < 10 ? DOT_FULL : DOT_EMPTY, fg: LIVE, bg: DEFAULT }])
+    const fg = t < 10 ? LIVE : mixColor(LIVE, TRACK, 0.5)
+    expect(composeDot(m, 'working', 'lively')).toEqual([{ cp: DOT_FULL, fg, bg: DEFAULT }])
   }
 })
 
