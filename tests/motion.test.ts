@@ -2,13 +2,27 @@ import { expect, test } from 'claude-code/testing'
 
 import { GLINT_UP, mixColor } from '../hooks/cells'
 import type { Cell } from '../hooks/cells'
-import { advance, composeBar, createMotion, isActive, observe } from '../hooks/motion'
+import {
+  DONE_FRAMES,
+  FRAME_MS,
+  IDLE_FRAME_MS,
+  advance,
+  composeBar,
+  createMotion,
+  frameMsFor,
+  isActive,
+  isBarActive,
+  observe,
+} from '../hooks/motion'
 import type { MotionState } from '../hooks/motion'
+import { markDone } from '../hooks/row'
 import { STYLES, drawBar, normalizeSettings } from '../hooks/styles'
-import type { BarPref, Motion } from '../types'
+import type { BarId, BarPref, Motion } from '../types'
 
 const GREEN = 0x5fff00
 const TRACK = 0x585858
+const NOW = Date.parse('2026-10-10T11:00:00Z')
+const HOUR = 3600_000
 
 const cellText = (cells: Cell[]): string => cells.map(c => String.fromCodePoint(c.cp)).join('')
 
@@ -194,4 +208,97 @@ test('a rate window that resets is fresh, never a glint; ctx is never a reset', 
   observe(ctx, 'ctx', { percent: 63, resetsAtMs: null }, pref, 'lively')
   observe(ctx, 'ctx', { percent: 0, resetsAtMs: null }, pref, 'lively')
   expect(ctx.bars.ctx.badge?.kind).toBe('compact')
+})
+
+test('a bar with nothing moving draws the same frame from then on, and the line moves only while one of its bars or the done mark does', () => {
+  const pref = { style: 'blocks', width: 5 }
+  const ids: BarId[] = ['ctx', 'five', 'week']
+  const scenarios: { name: string; id: BarId; make: () => MotionState }[] = [
+    {
+      name: 'a rise',
+      id: 'ctx',
+      make: () => {
+        const m = createMotion()
+        observe(m, 'ctx', { percent: 12, resetsAtMs: null }, pref, 'lively')
+        observe(m, 'ctx', { percent: 52, resetsAtMs: null }, pref, 'lively')
+
+        return m
+      },
+    },
+    {
+      name: 'a compaction',
+      id: 'ctx',
+      make: () => {
+        const m = createMotion()
+        observe(m, 'ctx', { percent: 85, resetsAtMs: null }, pref, 'lively')
+        observe(m, 'ctx', { percent: 23, resetsAtMs: null }, pref, 'lively')
+
+        return m
+      },
+    },
+    {
+      name: 'a reset',
+      id: 'five',
+      make: () => {
+        const m = createMotion()
+        observe(m, 'five', { percent: 40, resetsAtMs: NOW + 2 * HOUR }, pref, 'lively')
+        observe(m, 'five', { percent: 0, resetsAtMs: NOW + 5 * HOUR }, pref, 'lively')
+
+        return m
+      },
+    },
+    {
+      name: 'tokens',
+      id: 'ctx',
+      make: () => {
+        const m = createMotion()
+        observe(m, 'ctx', { percent: 12, resetsAtMs: null, tokens: 120_000 }, pref, 'lively')
+        observe(m, 'ctx', { percent: 52, resetsAtMs: null, tokens: 520_000 }, pref, 'lively')
+
+        return m
+      },
+    },
+    {
+      name: 'a bar entering',
+      id: 'week',
+      make: () => {
+        const m = createMotion()
+        observe(m, 'week', { percent: 30, resetsAtMs: null }, pref, 'lively', true)
+
+        return m
+      },
+    },
+  ]
+  for (const { name, id, make } of scenarios) {
+    const m = make()
+    let settledAt = -1
+    for (let i = 0; i < 400; i++) {
+      expect(isActive(m), `${name}: tick ${i}`).toBe(ids.some(b => isBarActive(m, b)))
+      if (!isBarActive(m, id)) {
+        settledAt = i
+        break
+      }
+      advance(m)
+    }
+    expect(settledAt, `${name} settles`).toBeGreaterThan(-1)
+    const a = composeBar(m, id, pref, 'lively')
+    for (let i = 0; i < 200; i++) advance(m)
+    expect(isBarActive(m, id), `${name}: still settled`).toBe(false)
+    expect(composeBar(m, id, pref, 'lively'), name).toEqual(a)
+  }
+})
+
+test('the frame timer runs every frame only while something moves', () => {
+  const pref = { style: 'blocks', width: 5 }
+  const m = createMotion()
+  expect(frameMsFor(m)).toBe(IDLE_FRAME_MS)
+  observe(m, 'ctx', { percent: 12, resetsAtMs: null }, pref, 'lively')
+  observe(m, 'ctx', { percent: 52, resetsAtMs: null }, pref, 'lively')
+  expect(frameMsFor(m)).toBe(FRAME_MS)
+  for (let i = 0; i < 400; i++) advance(m)
+  expect(frameMsFor(m)).toBe(IDLE_FRAME_MS)
+  markDone(m)
+  expect(frameMsFor(m)).toBe(FRAME_MS)
+  for (let i = 0; i < DONE_FRAMES; i++) advance(m)
+  expect(frameMsFor(m)).toBe(IDLE_FRAME_MS)
 })

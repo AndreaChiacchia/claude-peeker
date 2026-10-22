@@ -75,9 +75,9 @@ Set them in `/config`, or in settings under `pluginConfigs.claudepeeker`. A chan
 
 - **Figures:** context and rate limits come from `$.session.usage()`. These are the same readings a `statusLine` script gets on stdin as `context_window` and `rate_limits`. The tokens come from `context.tokens` in the same reading. The line redraws after every model response and every 30 seconds.
 - **Turn time:** counted from the `turn.start` of the main loop to its `turn.complete`. Subagent turns don't count.
-- **Painting:** the dot, the bars and the time are small cell grids repainted in place 20 times a second while a turn runs or an effect plays. Nothing is repainted while the line is idle. Off draws the plain line, which redraws once a second while a turn runs.
+- **Painting:** the dot, the bars and the time are small cell grids repainted in place 20 times a second while an effect plays, and 4 times a second while a turn runs with only the dot and the time moving. Nothing is repainted while the line is idle. Off draws the plain line, which redraws once a second while a turn runs.
 - **Effort:** read from each request the main session sends (`turn.step`), so it is what the model actually runs on. Before the first request, and after a `/model` or `/effort` change until the next request, it comes from settings: the model's own `modelSettings.<model>.effortLevel` first, then `effortLevel`, which is what `/effort` saves.
-- **Git:** read every 10 seconds and after each turn, with `git rev-parse --abbrev-ref HEAD`, `git status --porcelain --untracked-files=no` and `git rev-list --count @{u}..HEAD`.
+- **Git:** read every 10 seconds and after each turn, with `git status --porcelain=v2 --branch --untracked-files=no` (on a git older than 2.11, `git rev-parse --abbrev-ref HEAD`, `git status --porcelain --untracked-files=no` and `git rev-list --count @{u}..HEAD`).
 - **Your choices:** settings in `/config`, kept by Claude Code in settings.json, so they last across sessions, `/clear` and `/resume`.
 
 ## Limitations

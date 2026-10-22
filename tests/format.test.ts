@@ -8,6 +8,7 @@ import {
   modelLabel,
   nextTimeMode,
   paceDelta,
+  parseGitStatus,
   resetLabel,
   windowFigures,
   wordForReason,
@@ -119,4 +120,17 @@ test('settings fall back to their defaults', () => {
   expect(prefs.bars.ctx).toEqual({ style: 'parallelogram', width: 12 })
   expect(prefs.timeModes).toEqual({ five: 'relative', week: 'date' })
   expect(normalizeSettings({})).toEqual(DEFAULT_PREFS)
+})
+
+test('git status v2 reads as the branch and its mark', () => {
+  const head = '# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n'
+  const changed = '1 .M N... 100644 100644 100644 abc abc hooks/register.tsx\n'
+  expect(parseGitStatus(`${head}# branch.ab +0 -0\n`)).toEqual({ branch: 'main', mark: '' })
+  expect(parseGitStatus(`${head}# branch.ab +2 -0\n`)).toEqual({ branch: 'main', mark: 'ahead' })
+  expect(parseGitStatus(`${head}# branch.ab +2 -0\n${changed}`)).toEqual({ branch: 'main', mark: 'dirty' })
+  expect(parseGitStatus('# branch.oid abc\n# branch.head feature/x\n')).toEqual({ branch: 'feature/x', mark: '' })
+  expect(parseGitStatus('# branch.oid abc\n# branch.head (detached)\n')?.branch).toBe('HEAD')
+  expect(parseGitStatus('# branch.oid (initial)\n# branch.head main\n')).toBeNull()
+  expect(parseGitStatus(`${head}# branch.ab +2 -0\n`.replace(/\n/g, '\r\n'))).toEqual({ branch: 'main', mark: 'ahead' })
+  expect(parseGitStatus('')).toBeNull()
 })

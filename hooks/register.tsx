@@ -5,19 +5,23 @@ import type { BarId, GitInfo, Motion, Prefs, TimeMode } from '../types'
 import { encodeCells } from './cells'
 import type { Cell } from './cells'
 import { DEMO_END_MS, DEMO_TICK_MS, demoLine, isDemoChangeAt } from './demo'
-import { effortLabel, nextTimeMode, tone, windowFigures, wordForReason } from './format'
+import { effortLabel, nextTimeMode, parseGitStatus, tone, windowFigures, wordForReason } from './format'
 import type { FinishWord } from './format'
 import { lineGroups } from './line'
 import type { LineData, PieceId, Segment, TurnView } from './line'
 import {
   FINISH_MS,
   FRAME_MS,
+  IDLE_FRAME_MS,
+  IDLE_FRAME_TICKS,
   advance,
   composeBar,
   createMotion,
+  frameMsFor,
   freshBar,
   freshRow,
   isActive,
+  isBarActive,
   observe,
 } from './motion'
 import type { MotionState } from './motion'
@@ -34,6 +38,10 @@ const RASTER_PREFIX = 'peeker-'
 /** Fresh draws whose first blit was refused before the slot is drawn still. */
 const MAX_REFUSED_MOUNTS = 3
 const BAR_IDS: readonly BarId[] = ['ctx', 'five', 'week']
+
+function isBarPiece(id: PieceId): id is BarId {
+  return id !== 'dot' && id !== 'tail'
+}
 
 const git = atom({ plugin: 'claudepeeker', key: 'git' } as const, null)
 
@@ -60,6 +68,8 @@ let isTimeWriting = false
 let motion: MotionState = createMotion()
 let level: Motion = 'lively'
 let timer: Timer | null = null
+/** The running frame timer's period. */
+let timerMs = FRAME_MS
 /** Redraws the plain line once a second while a turn runs. */
 let stillTimer: Timer | null = null
 let isBlitting = false
@@ -70,6 +80,8 @@ type Site = { requestId: string; pieces: Piece[]; isLive: boolean }
 let site: Site | null = null
 /** What each Raster last showed, so an unchanged frame is not sent again. */
 const lastBlit = new Map<PieceId, string>()
+/** Bars whose last frame drawn or sent had nothing moving in it: until the next render their frame cannot change, so it is not composed again. */
+const settledBars = new Set<BarId>()
 /** The main loop's running turn; null between turns. */
 let turn: { startAt: number } | null = null
 /** How the main loop's last turn ended, and when. */
@@ -112,6 +124,7 @@ function ensureStill($: EngineInterface): void {
 function silenceBars(): void {
   for (const id of BAR_IDS) motion.bars[id] = freshBar()
   motion.row = freshRow()
+  settledBars.clear()
   stopTimer()
   site = null
 }
@@ -123,6 +136,19 @@ function endDemo($: EngineInterface): void {
   silenceBars()
   // The real figures come back silently.
   primed = false
+  $.ui.invalidate('ui.render')
+}
+
+/** A /clear or a resume: the demo ends, the bars take the next values silently, and the last turn is forgotten. */
+function forgetSession($: EngineInterface): void {
+  endDemo($)
+  silenceBars()
+  stopStill()
+  turn = null
+  lastTurn = null
+  primed = false
+  mainStep = null
+  lastBasis = null
   $.ui.invalidate('ui.render')
 }
 
@@ -150,8 +176,14 @@ function needsTimer(): boolean {
   return site !== null && !isStaticFallback && level !== 'off' && (site.isLive || isActive(motion))
 }
 
+/** Starts the frame timer, or changes its period: every frame while an effect plays, every `IDLE_FRAME_MS` while only the dot and the time move. */
 function kick($: EngineInterface): void {
-  if (timer === null && needsTimer()) timer = $.clock.every(FRAME_MS, () => void step($))
+  if (!needsTimer()) return
+  const ms = frameMsFor(motion)
+  if (timer !== null && timerMs === ms) return
+  timer?.cancel()
+  timerMs = ms
+  timer = $.clock.every(ms, () => void step($))
 }
 
 /** One frame: the motion advances and each piece's Raster is repainted in place. */
@@ -165,11 +197,15 @@ async function step($: EngineInterface): Promise<void> {
 
       return
     }
-    advance(motion)
-    const now = demo !== null ? demo.ticks * DEMO_TICK_MS : await $.clock.now()
+    // On the slow period one frame stands for IDLE_FRAME_TICKS ticks; nothing rolls then, so each only moves the tick.
+    const ticks = timerMs === IDLE_FRAME_MS ? IDLE_FRAME_TICKS : 1
+    for (let i = 0; i < ticks; i++) advance(motion)
+    // Only a working turn's live time reads the clock; every other piece ignores `now`.
+    const now = demo !== null ? demo.ticks * DEMO_TICK_MS : target.isLive ? await $.clock.now() : 0
     // A render replaced the site while the clock was read: its own mount is the newer frame; the timer goes on.
     if (site !== target) return
     for (const piece of target.pieces) {
+      if (isBarPiece(piece.id) && settledBars.has(piece.id) && !isBarActive(motion, piece.id)) continue
       const cells = piece.compose(now)
       if (cells.length !== piece.width) {
         // A width change (9% to 10%, a badge appearing or leaving, 9s to 10s) is a redraw, never a blit.
@@ -179,6 +215,7 @@ async function step($: EngineInterface): Promise<void> {
         return
       }
       const encoded = encodeCells(cells)
+      if (isBarPiece(piece.id) && !isBarActive(motion, piece.id)) settledBars.add(piece.id)
       if (encoded === lastBlit.get(piece.id)) continue
       const r = await $.ui.blit({ requestId: target.requestId, key: RASTER_PREFIX + piece.id, cells: encoded })
       if (r.deny === undefined) {
@@ -205,6 +242,7 @@ async function step($: EngineInterface): Promise<void> {
       if (site !== target) return
     }
     if (!needsTimer()) stopTimer()
+    else kick($)
   } finally {
     isBlitting = false
   }
@@ -294,7 +332,13 @@ async function refreshGit($: EngineInterface): Promise<void> {
   if (isGitRunning) return
   isGitRunning = true
   try {
-    const next = await readGit($)
+    let next: GitInfo | null
+    try {
+      next = await readGit($)
+    } catch {
+      // A git that cannot start, or outlives its 5 s, leaves the branch as shown.
+      return
+    }
     const now = await read($, git)
     if (now?.branch !== next?.branch || now?.mark !== next?.mark) await update($, git, () => next)
   } finally {
@@ -307,6 +351,9 @@ async function readGit($: EngineInterface): Promise<GitInfo | null> {
   const root = await $.session.root()
   const run = (...args: string[]) =>
     $.process.run(['git', '-C', root, '--no-optional-locks', ...args], { timeoutMs: 5000 })
+  // One process reports the branch, the changes and the commits ahead (git 2.11 and later); an older git falls through.
+  const all = await run('status', '--porcelain=v2', '--branch', '--untracked-files=no')
+  if (all.exitCode === 0) return parseGitStatus(all.stdout)
   const head = await run('rev-parse', '--abbrev-ref', 'HEAD')
   if (head.exitCode !== 0) return null
   const branch = head.stdout.trim()
@@ -401,6 +448,7 @@ export const register: Register = (on, options) => {
   isBlitting = false
   site = null
   lastBlit.clear()
+  settledBars.clear()
   framesSinceMount = 0
   refusedMounts = 0
   everBlitted = false
@@ -423,10 +471,11 @@ export const register: Register = (on, options) => {
     $.clock.every(TICK_MS, () => $.ui.invalidate('ui.render'))
     $.clock.every(GIT_EVERY_MS, () => void refreshGit($))
     void refreshGit($)
-    // A /clear or a resume ends a demo. The first values after a start or a /clear are taken
-    // silently: a cleared context is not a compaction.
+    // A start or a reload ends a demo (a /clear or a resume reaches the line through `session.end`).
+    // The first values after a start are taken silently: a cleared context is not a compaction.
     endDemo($)
     motion = createMotion()
+    settledBars.clear()
     stopStill()
     turn = null
     lastTurn = null
@@ -435,6 +484,13 @@ export const register: Register = (on, options) => {
     lastBasis = null
     // A module reloaded by a /config change redraws at once.
     $.ui.invalidate('ui.render')
+
+    return next(e)
+  })
+
+  // /clear and /resume fire no `session.start`: the line sees them as the end of the old session.
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear' || e.reason === 'resume') forgetSession($)
 
     return next(e)
   })
@@ -560,6 +616,7 @@ export const register: Register = (on, options) => {
       const pieces: Piece[] = []
       const encoded: Partial<Record<PieceId, string>> = {}
       lastBlit.clear()
+      settledBars.clear()
       const mount = (id: PieceId, width: number, cells: Cell[], compose: (now: number) => Cell[]): void => {
         const mounted = encodeCells(cells)
         encoded[id] = mounted
@@ -571,6 +628,7 @@ export const register: Register = (on, options) => {
         if (!readings[id]) continue
         const pref = data.prefs.bars[id]
         const cells = composeBar(motion, id, pref, moving)
+        if (!isBarActive(motion, id)) settledBars.add(id)
         mount(id, cells.length, cells, () => composeBar(motion, id, pref, moving))
       }
       if (tail !== null) {

@@ -33,7 +33,13 @@ type State = {
   settings: unknown
   /** What `config.set` answers: a deny, or nothing (written). */
   configAnswer: { deny?: string }
+  /** True: `session.repo` answers a repository, so the git refresh runs its commands. */
+  repo: boolean
+  /** What a git command (its arguments after the `git -C <root> --no-optional-locks` prefix) answers; it may throw. */
+  gitAnswer: (args: readonly string[]) => { exitCode: number; stdout: string }
 }
+
+const ROOT = 'C:\\Users\\a\\projects\\mods\\claudepeeker'
 
 /** What the engine measures for the figures `state` holds now. */
 const figures = (state: State) => ({
@@ -64,7 +70,10 @@ function world(on: On, stacked: string[] = []) {
     tokens: true,
     settings: { effortLevel: 'medium', modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } },
     configAnswer: {},
+    repo: false,
+    gitAnswer: () => ({ exitCode: 1, stdout: '' }),
   }
+  const gitRuns: string[][] = []
   const blits: { requestId: string; key: string; cells?: string }[] = []
   const configSets: { key: string; value: unknown }[] = []
   const toasts: string[] = []
@@ -83,9 +92,20 @@ function world(on: On, stacked: string[] = []) {
   on('store.keys', () => ({ value: [...store.keys()] }))
   on('session.usage', () => ({ value: { startedAt: NOW - HOUR, ...figures(state) } }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
-  on('session.root', () => ({ value: 'C:\\Users\\a\\projects\\mods\\claudepeeker' }))
-  // Not a git repository: the git refresh that runs on every turn (and at start) settles at once, with nothing to show.
-  on('session.repo', () => ({ value: null }) as never)
+  on('session.root', () => ({ value: ROOT }))
+  // By default not a git repository: the git refresh that runs on every turn (and at start) settles at once, with nothing to show.
+  // With `state.repo` it is one, and `state.gitAnswer` answers each git command, recorded in `gitRuns`.
+  on('session.repo', () => ({ value: state.repo ? { root: ROOT, remote: null, internal: false, name: null } : null }) as never)
+  on('process.run', (_$, e) => {
+    const args = e.argv.slice(4)
+    gitRuns.push([...args])
+
+    return { value: { ...state.gitAnswer(args), stderr: '' } } as never
+  })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }) as never)
+  on('ui.status', () => ({ value: undefined }) as never)
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
   on('settings.read', () => ({ value: state.settings }) as never)
   on('ui.blit', (_$, e) => {
     blits.push({ requestId: e.requestId, key: e.key, cells: (e as unknown as { cells?: string }).cells })
@@ -134,7 +154,7 @@ function world(on: On, stacked: string[] = []) {
     )
   })
 
-  return { state, blits, clock, store, configSets, toasts }
+  return { state, blits, clock, store, configSets, toasts, gitRuns }
 }
 
 type World = ReturnType<typeof world>
@@ -619,4 +639,133 @@ test('without a token count the ctx figure stands alone', async ($, on) => {
   const line = text(await ui.drawn())
   expect(line).toContain('12%')
   expect(line).not.toContain('120K')
+})
+
+test('a bar that changes while a turn runs animates, then only the dot and the time move', async ($, on) => {
+  const w = world(on)
+  await startTurn($)
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  w.state.ctx = 52
+  await measure($, w, ['context'])
+  await ui.drawn()
+  await w.clock.advance(3000)
+  const ctxCount = w.blits.filter(b => b.key === 'peeker-ctx').length
+  expect(ctxCount).toBeGreaterThan(0)
+  const lastCtx = w.blits.filter(b => b.key === 'peeker-ctx').at(-1)
+  expect(cellText(decodeCells(lastCtx?.cells ?? ''))).toBe('▰▰▰▱▱ 52% · 520K')
+  const dots = w.blits.filter(b => b.key === 'peeker-dot').length
+  const tails = w.blits.filter(b => b.key === 'peeker-tail').length
+
+  await w.clock.advance(2000)
+  expect(w.blits.filter(b => b.key === 'peeker-ctx').length).toBe(ctxCount)
+  expect(w.blits.filter(b => b.key === 'peeker-dot').length).toBeGreaterThan(dots)
+  expect(w.blits.filter(b => b.key === 'peeker-tail').length).toBeGreaterThan(tails)
+})
+
+test('while a turn runs and nothing else moves, the dot keeps its beat and the time its seconds', async ($, on) => {
+  const w = world(on)
+  await startTurn($)
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  await w.clock.advance(5100)
+  expect(w.blits.filter(b => b.key === 'peeker-dot').length).toBe(10)
+  const tails = w.blits.filter(b => b.key === 'peeker-tail').map(b => cellText(decodeCells(b.cells ?? '')))
+  expect(tails).toEqual(['1s', '2s', '3s', '4s', '5s'])
+})
+
+/** `git status --porcelain=v2 --branch`: on main, one tracked file changed. */
+const V2_DIRTY =
+  '# branch.oid abc\n# branch.head main\n# branch.ab +0 -0\n1 .M N... 100644 100644 100644 abc abc hooks/register.tsx\n'
+
+/** The session starts: the git refresh runs at once, then every 10 s. */
+const startSession = ($: Engine) => $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true } as never)
+
+test('the branch comes from one git command per refresh', async ($, on) => {
+  const w = world(on)
+  w.state.repo = true
+  w.state.gitAnswer = args => (args[1] === '--porcelain=v2' ? { exitCode: 0, stdout: V2_DIRTY } : { exitCode: 1, stdout: '' })
+  await startSession($)
+  await w.clock.settle()
+  const ui = await $.ui.mount(HINT)
+  await measure($, w, ['context'])
+  expect(text(await ui.drawn())).toContain('claudepeeker/main*')
+  // The start's refresh was one command.
+  expect(w.gitRuns.length).toBe(1)
+  const before = w.gitRuns.length
+  await w.clock.advance(10_500)
+  expect(w.gitRuns.length - before).toBe(1)
+  for (const run of w.gitRuns) {
+    expect(run[0]).toBe('status')
+    expect(run[1]).toBe('--porcelain=v2')
+  }
+})
+
+test('an old git falls back to the three commands', async ($, on) => {
+  const w = world(on)
+  w.state.repo = true
+  w.state.gitAnswer = args => {
+    if (args[1] === '--porcelain=v2') return { exitCode: 129, stdout: '' }
+    if (args[0] === 'rev-parse') return { exitCode: 0, stdout: 'main\n' }
+    if (args[0] === 'status') return { exitCode: 0, stdout: '' }
+    return { exitCode: 0, stdout: '0\n' }
+  }
+  await startSession($)
+  await w.clock.settle()
+  const ui = await $.ui.mount(HINT)
+  await measure($, w, ['context'])
+  const line = text(await ui.drawn())
+  expect(line).toContain('claudepeeker/main ')
+  expect(line).not.toContain('claudepeeker/main*')
+  expect(w.gitRuns.slice(0, 4).map(run => run[0])).toEqual(['status', 'rev-parse', 'status', 'rev-list'])
+})
+
+test('a git that cannot start leaves the project name alone', async ($, on) => {
+  const w = world(on)
+  w.state.repo = true
+  w.state.gitAnswer = () => {
+    throw new Error('spawn git ENOENT')
+  }
+  await startSession($)
+  await w.clock.settle()
+  const ui = await $.ui.mount(HINT)
+  await w.clock.advance(10_500)
+  await measure($, w, ['context'])
+  // Git was tried (at the start and again after 10 s), and the line still shows the bare project name.
+  expect(w.gitRuns.length).toBeGreaterThan(1)
+  const line = text(await ui.drawn())
+  expect(line).toContain(' · claudepeeker · ')
+  expect(line).not.toContain('claudepeeker/')
+})
+
+test('a /clear takes the next figures silently and forgets the last turn', async ($, on) => {
+  const w = world(on)
+  w.state.ctx = 85
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  await startTurn($)
+  await endTurn($, 42_000)
+  await ui.drawn()
+  await w.clock.advance(2100)
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  w.state.ctx = 3
+  await measure($, w, ['context'])
+  const after = text(await ui.drawn())
+  expect(after).toContain('ctx (1M) ▰▱▱▱▱ 3% · 30K')
+  expect(after).not.toContain('\u21bb')
+  expect(after.endsWith('42s')).toBe(false)
+  const count = w.blits.length
+  await w.clock.advance(1000)
+  expect(w.blits.length).toBe(count)
+})
+
+test('a /clear ends a running demo', async ($, on) => {
+  const w = world(on)
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  await command($, 'demo')
+  await w.clock.advance(3000)
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  expect(text(await ui.drawn())).toContain('ctx (1M) ▰▱▱▱▱ 12%')
+  expect((await command($, 'demo stop')).text).toBe('No demo is running.')
 })

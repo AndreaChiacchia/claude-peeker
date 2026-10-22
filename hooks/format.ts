@@ -1,6 +1,6 @@
 // Pure figures and text for the status line, ported from statusline-command.js.
 
-import type { TimeMode } from '../types'
+import type { GitInfo, TimeMode } from '../types'
 
 export type Tone = 'ok' | 'warn' | 'hot'
 
@@ -139,4 +139,27 @@ export function windowFigures(
     resetsAtMs,
     delta: resetsAtMs === null ? null : paceDelta(percent, resetsAtMs, windowHours, now),
   }
+}
+
+/** `git status --porcelain=v2 --branch` as the line shows it: the branch (`HEAD` when detached), `dirty` before `ahead`; null on an unborn branch, as `rev-parse HEAD` fails there. */
+export function parseGitStatus(stdout: string): GitInfo | null {
+  let branch: string | null = null
+  let ahead = 0
+  let isDirty = false
+  for (const line of stdout.split(/\r?\n/)) {
+    if (line.startsWith('# branch.oid ')) {
+      if (line.slice('# branch.oid '.length) === '(initial)') return null
+    } else if (line.startsWith('# branch.head ')) {
+      const head = line.slice('# branch.head '.length)
+      branch = head === '(detached)' ? 'HEAD' : head
+    } else if (line.startsWith('# branch.ab ')) {
+      const first = line.slice('# branch.ab '.length).split(' ')[0] ?? ''
+      ahead = parseInt(first.replace(/^\+/, ''), 10) || 0
+    } else if (line !== '' && !line.startsWith('#')) {
+      isDirty = true
+    }
+  }
+  if (branch === null) return null
+
+  return { branch, mark: isDirty ? 'dirty' : ahead > 0 ? 'ahead' : '' }
 }
