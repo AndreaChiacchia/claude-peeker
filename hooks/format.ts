@@ -1,6 +1,6 @@
 // Pure figures and text for the status line, ported from statusline-command.js.
 
-import type { GitInfo, TimeMode } from '../types'
+import type { FableWindow, GitInfo, TimeMode } from '../types'
 
 export type Tone = 'ok' | 'warn' | 'hot'
 
@@ -139,6 +139,50 @@ export function windowFigures(
     resetsAtMs,
     delta: resetsAtMs === null ? null : paceDelta(percent, resetsAtMs, windowHours, now),
   }
+}
+
+/** Two reset moments this close are the same reset: the 10 minutes motion's RESET_SHIFT_MS uses to tell a new window. */
+export const SAME_RESET_MS = 600_000
+
+export function isSameReset(a: number | null, b: number | null): boolean {
+  return a !== null && b !== null && Math.abs(a - b) <= SAME_RESET_MS
+}
+
+/**
+ * The Fable weekly row of claude.ai's usage answer (`limits[]`, `kind: 'weekly_scoped'`, model `Fable`).
+ * Null when the text is not a JSON object (unreadable: keep what is shown); `{ window: null }` when
+ * the answer has no usable Fable row.
+ */
+export function readFableWindow(text: string): { window: FableWindow | null } | null {
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return null
+  const limits = (body as { limits?: unknown }).limits
+  if (!Array.isArray(limits)) return { window: null }
+  for (const row of limits as unknown[]) {
+    if (typeof row !== 'object' || row === null) continue
+    const { kind, scope, percent, resets_at: resetsAt } = row as {
+      kind?: unknown
+      scope?: { model?: { display_name?: unknown } | null } | null
+      percent?: unknown
+      resets_at?: unknown
+    }
+    const name = scope?.model?.display_name
+    if (kind !== 'weekly_scoped' || typeof name !== 'string' || name.trim().toLowerCase() !== 'fable') continue
+    if (typeof percent !== 'number' || !Number.isFinite(percent)) return { window: null }
+    if (typeof resetsAt === 'string') return { window: { percentUsed: percent, resetsAt } }
+    if (typeof resetsAt === 'number' && Number.isFinite(resetsAt)) {
+      return { window: { percentUsed: percent, resetsAt: new Date(resetsAt * 1000).toISOString() } }
+    }
+
+    return { window: { percentUsed: percent } }
+  }
+
+  return { window: null }
 }
 
 /** `git status --porcelain=v2 --branch` as the line shows it: the branch (`HEAD` when detached), `dirty` before `ahead`; null on an unborn branch, as `rev-parse HEAD` fails there. */

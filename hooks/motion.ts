@@ -104,7 +104,7 @@ export type Odo = {
 export type BarAnim = {
   /** The last percent seen; `null` = never seen (the next value is taken silently). */
   target: number | null
-  /** The last reset time seen (5h/wk; always null for ctx). */
+  /** The last reset time seen (the rate windows; always null for ctx). */
   resetsAtMs: number | null
   /** The rolling figure (integer). */
   shown: number
@@ -162,7 +162,7 @@ export function freshRow(): RowAnim {
 }
 
 export function createMotion(): MotionState {
-  return { tick: 0, bars: { ctx: freshBar(), five: freshBar(), week: freshBar() }, row: freshRow() }
+  return { tick: 0, bars: { ctx: freshBar(), five: freshBar(), week: freshBar(), fable: freshBar() }, row: freshRow() }
 }
 
 /** Ease-out quad: `1 - (1 - p)^2` with `p = min(1, elapsed / frames)`. */

@@ -5,10 +5,12 @@ import {
   effortLabel,
   formatElapsed,
   formatTokens,
+  isSameReset,
   modelLabel,
   nextTimeMode,
   paceDelta,
   parseGitStatus,
+  readFableWindow,
   resetLabel,
   windowFigures,
   wordForReason,
@@ -118,8 +120,49 @@ test('settings fall back to their defaults', () => {
   const prefs = normalizeSettings({ fiveStyle: 'gone', fiveWidth: '7', ctxWidth: '12', weekTime: 'date' })
   expect(prefs.bars.five).toEqual({ style: 'blocks', width: 5 })
   expect(prefs.bars.ctx).toEqual({ style: 'parallelogram', width: 12 })
-  expect(prefs.timeModes).toEqual({ five: 'relative', week: 'date' })
+  expect(prefs.timeModes).toEqual({ five: 'relative', week: 'date', fable: 'relative' })
+  expect(normalizeSettings({ fableWidth: '7' }).bars.fable).toEqual({ style: 'blocks', width: 3 })
   expect(normalizeSettings({})).toEqual(DEFAULT_PREFS)
+})
+
+test('two reset moments within 10 minutes are the same reset', () => {
+  const t = NOW
+  expect(isSameReset(t, t)).toBe(true)
+  expect(isSameReset(t, t + 600_000)).toBe(true)
+  expect(isSameReset(t, t + 600_001)).toBe(false)
+  expect(isSameReset(t - 600_001, t)).toBe(false)
+  expect(isSameReset(null, t)).toBe(false)
+  expect(isSameReset(t, null)).toBe(false)
+  expect(isSameReset(null, null)).toBe(false)
+})
+
+test('the usage answer reads as the Fable weekly window', () => {
+  const resetsAt = '2026-10-14T00:00:00.000Z'
+  const fable = (extra: Record<string, unknown>) => ({
+    kind: 'weekly_scoped',
+    group: 'weekly',
+    percent: 20,
+    resets_at: resetsAt,
+    scope: { model: { display_name: 'Fable' } },
+    ...extra,
+  })
+  const answer = (...limits: unknown[]) => JSON.stringify({ limits })
+  const all = { kind: 'weekly_all', group: 'weekly', percent: 1, resets_at: resetsAt }
+
+  expect(readFableWindow(answer(all, fable({})))).toEqual({ window: { percentUsed: 20, resetsAt } })
+  expect(readFableWindow(answer(fable({ resets_at: Date.parse(resetsAt) / 1000 })))).toEqual({
+    window: { percentUsed: 20, resetsAt },
+  })
+  expect(readFableWindow(answer(fable({ resets_at: null })))).toEqual({ window: { percentUsed: 20 } })
+  expect(readFableWindow(answer(fable({ scope: { model: { display_name: ' fable ' } } })))).toEqual({
+    window: { percentUsed: 20, resetsAt },
+  })
+  expect(readFableWindow(answer(all, fable({ scope: { model: { display_name: 'Opus' } } })))).toEqual({ window: null })
+  expect(readFableWindow(answer(fable({ percent: null })))).toEqual({ window: null })
+  expect(readFableWindow(JSON.stringify({ other: 1 }))).toEqual({ window: null })
+  expect(readFableWindow('not json')).toBeNull()
+  expect(readFableWindow('null')).toBeNull()
+  expect(readFableWindow('[]')).toBeNull()
 })
 
 test('git status v2 reads as the branch and its mark', () => {

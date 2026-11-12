@@ -24,21 +24,22 @@ export type DemoFrame = {
   ctx: number
   five: number
   week: number
+  fable: number
   /** True once the 5h window has reset. */
   fiveReset: boolean
 }
 
 export const DEMO_SCRIPT: readonly DemoFrame[] = [
-  { at: 0, ctx: 20, five: 40, week: 30, fiveReset: false }, // the baseline, taken silently
-  { at: 1500, ctx: 23, five: 40, week: 30, fiveReset: false }, // a small rise
-  { at: 3000, ctx: 26, five: 40, week: 30, fiveReset: false }, // another small rise
-  { at: 4500, ctx: 31, five: 40, week: 30, fiveReset: false }, // a rise of 5: two glint passes
-  { at: 6500, ctx: 56, five: 40, week: 30, fiveReset: false }, // a jump past 50%
-  { at: 7500, ctx: 56, five: 40, week: 35, fiveReset: false }, // the weekly bar rises on its own
-  { at: 9000, ctx: 84, five: 40, week: 35, fiveReset: false }, // a jump past 80%
-  { at: 11500, ctx: 68, five: 40, week: 35, fiveReset: false }, // a drop
-  { at: 13500, ctx: 15, five: 40, week: 35, fiveReset: false }, // a compaction
-  { at: 16000, ctx: 15, five: 0, week: 35, fiveReset: true }, // the 5h window resets
+  { at: 0, ctx: 20, five: 40, week: 30, fable: 12, fiveReset: false }, // the baseline, taken silently
+  { at: 1500, ctx: 23, five: 40, week: 30, fable: 12, fiveReset: false }, // a small rise
+  { at: 3000, ctx: 26, five: 40, week: 30, fable: 12, fiveReset: false }, // another small rise
+  { at: 4500, ctx: 31, five: 40, week: 30, fable: 12, fiveReset: false }, // a rise of 5: two glint passes
+  { at: 6500, ctx: 56, five: 40, week: 30, fable: 12, fiveReset: false }, // a jump past 50%
+  { at: 7500, ctx: 56, five: 40, week: 35, fable: 16, fiveReset: false }, // the weekly bars rise on their own
+  { at: 9000, ctx: 84, five: 40, week: 35, fable: 16, fiveReset: false }, // a jump past 80%
+  { at: 11500, ctx: 68, five: 40, week: 35, fable: 16, fiveReset: false }, // a drop
+  { at: 13500, ctx: 15, five: 40, week: 35, fable: 16, fiveReset: false }, // a compaction
+  { at: 16000, ctx: 15, five: 0, week: 35, fable: 16, fiveReset: true }, // the 5h window resets
 ]
 
 /** The last row whose time has come (the first row for anything earlier). */
@@ -70,7 +71,7 @@ export function isDemoChangeAt(ms: number): boolean {
 }
 
 /**
- * `data` with the three figures, the context tokens and the turn replaced by the script's. The pace delta is hidden so no
+ * `data` with the figures, the context tokens and the turn replaced by the script's. The pace delta is hidden so no
  * made-up `[+n%]` shows; the 5h reset time moves later at the reset row, which `observe` reads as a new window.
  */
 export function demoLine(data: LineData, elapsedMs: number, startedAt: number): LineData {
@@ -87,5 +88,6 @@ export function demoLine(data: LineData, elapsedMs: number, startedAt: number): 
       delta: null,
     },
     week: { percent: frame.week, resetsAtMs: startedAt + WEEK_MS, delta: null },
+    fable: data.fable === null ? null : { percent: frame.fable, resetsAtMs: startedAt + WEEK_MS, delta: null },
   }
 }

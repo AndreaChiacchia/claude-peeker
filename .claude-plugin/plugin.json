@@ -47,6 +47,20 @@
       "default": "5",
       "options": ["3", "4", "5", "6", "8", "10", "12", "15", "20"]
     },
+    "fableStyle": {
+      "type": "string",
+      "title": "Fable weekly bar style",
+      "description": "The look of the Fable weekly limit bar (fb). blocks: █ on ░, the tip easing by eighths of a cell while the bar grows. parallelogram: ▰ on ▱. shade: ▓ on ░. solid: █ on a gray █. smooth: █ on ░, the edge always by eighths of a cell. smooth-bare: the same on blank. line: ━ on ─. heavy: a bold ━ on a dim ━. dots: ● on ○. squares: ■ on □. diamonds: ◆ on ◇. braille: ⣿ on ⣀. ascii: # on - between [ and ], for fonts without these glyphs. arrow: ===> between [ and ]. pie: one glyph, ○ ◔ ◑ ◕ ●. spark: one glyph, ▁ to █. none: no bar, the percent alone.",
+      "default": "blocks",
+      "options": ["blocks", "parallelogram", "shade", "solid", "smooth", "smooth-bare", "line", "heavy", "dots", "squares", "diamonds", "braille", "ascii", "arrow", "pie", "spark", "none"]
+    },
+    "fableWidth": {
+      "type": "string",
+      "title": "Fable weekly bar width",
+      "description": "How many cells the Fable weekly bar takes: 3 to 20. pie, spark and none ignore it.",
+      "default": "3",
+      "options": ["3", "4", "5", "6", "8", "10", "12", "15", "20"]
+    },
     "fiveTime": {
       "type": "string",
       "title": "5h reset time",
@@ -58,6 +72,13 @@
       "type": "string",
       "title": "Weekly reset time",
       "description": "How the weekly reset time reads. relative: the time left (6d17h). clock: the local time (Fri 05:00, or 13:50 when it is today). date: the day, month and time (17/10 05:00). A click on the time in the status line steps to the next one.",
+      "default": "relative",
+      "options": ["relative", "clock", "date"]
+    },
+    "fableTime": {
+      "type": "string",
+      "title": "Fable weekly reset time",
+      "description": "How the Fable weekly reset time reads. relative: the time left (6d17h). clock: the local time (Fri 05:00, or 13:50 when it is today). date: the day, month and time (17/10 05:00). It shows only when it differs from the weekly reset by more than 10 minutes; a click on it in the status line steps to the next one.",
       "default": "relative",
       "options": ["relative", "clock", "date"]
     },

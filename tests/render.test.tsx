@@ -37,6 +37,12 @@ type State = {
   repo: boolean
   /** What a git command (its arguments after the `git -C <root> --no-optional-locks` prefix) answers; it may throw. */
   gitAnswer: (args: readonly string[]) => { exitCode: number; stdout: string }
+  /** What `session.authorize` holds: a claude.ai login, an API key, or nothing. */
+  credential: 'bearer' | 'api-key' | null
+  /** The account's Fable weekly window in the usage endpoint's answer; null: the answer has no Fable row. */
+  fable: { percentUsed: number; resetsAt: string } | null
+  /** How the usage endpoint answers: a body, a 500, or a throw. */
+  fetchAnswer: 'ok' | 'fail' | 'throw'
 }
 
 const ROOT = 'C:\\Users\\a\\projects\\mods\\claudepeeker'
@@ -72,8 +78,12 @@ function world(on: On, stacked: string[] = []) {
     configAnswer: {},
     repo: false,
     gitAnswer: () => ({ exitCode: 1, stdout: '' }),
+    credential: null,
+    fable: null,
+    fetchAnswer: 'ok',
   }
   const gitRuns: string[][] = []
+  const fetches: { url: string; auth: string | undefined }[] = []
   const blits: { requestId: string; key: string; cells?: string }[] = []
   const configSets: { key: string; value: unknown }[] = []
   const toasts: string[] = []
@@ -101,6 +111,29 @@ function world(on: On, stacked: string[] = []) {
     gitRuns.push([...args])
 
     return { value: { ...state.gitAnswer(args), stderr: '' } } as never
+  })
+  // By default no login: the Fable refresh that runs at the start asks for nothing and shows nothing.
+  on('session.authorize', () => ({ value: state.credential === null ? null : { handle: 'h1', kind: state.credential } }) as never)
+  on('http.fetch', (_$, e) => {
+    fetches.push({ url: e.url, auth: e.init?.auth })
+    if (state.fetchAnswer === 'throw') throw new Error('offline')
+    if (state.fetchAnswer === 'fail') return { value: { status: 500, ok: false, headers: {}, text: '' } } as never
+    const limits = [
+      { kind: 'weekly_all', group: 'weekly', percent: 1, resets_at: state.week.resetsAt },
+      ...(state.fable
+        ? [
+            {
+              kind: 'weekly_scoped',
+              group: 'weekly',
+              percent: state.fable.percentUsed,
+              resets_at: state.fable.resetsAt,
+              scope: { model: { display_name: 'Fable' } },
+            },
+          ]
+        : []),
+    ]
+
+    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ limits }) } } as never
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }) as never)
@@ -154,7 +187,7 @@ function world(on: On, stacked: string[] = []) {
     )
   })
 
-  return { state, blits, clock, store, configSets, toasts, gitRuns }
+  return { state, blits, clock, store, configSets, toasts, gitRuns, fetches }
 }
 
 type World = ReturnType<typeof world>
@@ -768,4 +801,142 @@ test('a /clear ends a running demo', async ($, on) => {
   await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
   expect(text(await ui.drawn())).toContain('ctx (1M) ▰▱▱▱▱ 12%')
   expect((await command($, 'demo stop')).text).toBe('No demo is running.')
+})
+
+/** The account has a Fable weekly window at 20%, 84 h from its reset: the pace is 50%, so the delta reads +30%. */
+const withFable = (w: World): void => {
+  w.state.credential = 'bearer'
+  w.state.fable = { percentUsed: 20, resetsAt: new Date(NOW + 84 * HOUR).toISOString() }
+}
+
+test('the Fable figure rides in the weekly group, with its own reset when it differs', async ($, on) => {
+  const w = world(on)
+  withFable(w)
+  await startSession($)
+  await w.clock.settle()
+  const drawn = await (await $.ui.mount(HINT)).drawn()
+  expect(text(drawn)).toBe(`? for shortcuts${LINE} · fb (3d12h) █░░ 20% [+30%]`)
+  expect(rasters(drawn).map(keyOf)).toEqual(['peeker-dot', 'peeker-ctx', 'peeker-five', 'peeker-week', 'peeker-fable'])
+  expect(w.fetches).toEqual([{ url: 'https://api.anthropic.com/api/oauth/usage', auth: 'h1' }])
+})
+
+test('an answer without a Fable row shows no Fable bar', async ($, on) => {
+  const w = world(on)
+  w.state.credential = 'bearer'
+  await startSession($)
+  await w.clock.settle()
+  const line = text(await (await $.ui.mount(HINT)).drawn())
+  expect(w.fetches.length).toBe(1)
+  expect(line).not.toContain(' · fb ')
+})
+
+test('a failed read leaves the Fable bar as shown', async ($, on) => {
+  const w = world(on)
+  withFable(w)
+  await startSession($)
+  await w.clock.settle()
+  const ui = await $.ui.mount(HINT)
+  expect(text(await ui.drawn())).toContain(' · fb (3d12h) █░░ 20%')
+
+  w.state.fetchAnswer = 'fail'
+  await w.clock.advance(300_500)
+  expect(w.fetches.length).toBe(2)
+  expect(text(await ui.drawn())).toMatch(/ · fb \([^)]*\) █░░ 20%/)
+
+  w.state.fetchAnswer = 'throw'
+  await w.clock.advance(300_500)
+  expect(w.fetches.length).toBe(3)
+  expect(text(await ui.drawn())).toMatch(/ · fb \([^)]*\) █░░ 20%/)
+})
+
+test('the usage endpoint is read at the start, every 5 minutes and after a main turn, at most once a minute', async ($, on) => {
+  const w = world(on)
+  withFable(w)
+  await startSession($)
+  await w.clock.settle()
+  expect(w.fetches.length).toBe(1)
+
+  await startTurn($)
+  await endTurn($, 1000)
+  await w.clock.settle()
+  expect(w.fetches.length).toBe(1)
+
+  await w.clock.advance(300_500)
+  expect(w.fetches.length).toBe(2)
+})
+
+test('a click on the Fable reset time cycles only its format', async ($, on) => {
+  const w = world(on)
+  withFable(w)
+  await startSession($)
+  await w.clock.settle()
+  const ui = await $.ui.mount(HINT)
+  await ui.drawn()
+  await ui.press({ key: 'reset-fable' })
+  expect((await ui.find({ key: 'reset-fable' }))?.text).toBe('(Wed 01:00)')
+  expect((await ui.find({ key: 'reset-week' }))?.text).toBe('(6d18h)')
+  expect(w.configSets).toEqual([{ key: 'claudepeeker.fableTime', value: 'clock' }])
+})
+
+test('an API key has no usage endpoint to read: no request and no Fable bar', async ($, on) => {
+  const w = world(on)
+  withFable(w)
+  w.state.credential = 'api-key'
+  await startSession($)
+  await w.clock.settle()
+  const line = text(await (await $.ui.mount(HINT)).drawn())
+  expect(w.fetches.length).toBe(0)
+  expect(line).not.toContain(' · fb ')
+})
+
+/** The Fable window resets with the weekly one; at 20% with 6 h of 168 h gone the delta reads -16%. */
+const sameReset = (w: World): void => {
+  w.state.credential = 'bearer'
+  w.state.fable = { percentUsed: 20, resetsAt: w.state.week.resetsAt }
+}
+
+test('a Fable reset that matches the weekly one is not repeated', async ($, on) => {
+  const w = world(on)
+  sameReset(w)
+  await startSession($)
+  await w.clock.settle()
+  const ui = await $.ui.mount(HINT)
+  const drawn = await ui.drawn()
+  expect(text(drawn)).toBe(`? for shortcuts${LINE} · fb █░░ 20% [-16%]`)
+  expect(await ui.find({ key: 'reset-fable' })).toBeFalsy()
+  expect(rasters(drawn).map(keyOf).at(-1)).toBe('peeker-fable')
+})
+
+test('the weekly and Fable figures wrap together', async ($, on) => {
+  const w = world(on)
+  sameReset(w)
+  await startSession($)
+  await w.clock.settle()
+  const drawn = await (await $.ui.mount(HINT)).drawn()
+  const boxes = walk(drawn).filter(n => n.type === 'Box' && n.props?.flexShrink === 0)
+  const weekly = boxes.filter(n => text(n).includes('wk ('))
+  expect(weekly.length).toBe(1)
+  expect(text(weekly[0])).toBe(' · wk (6d18h) █░░░░ 1% · fb █░░ 20% [-16%]')
+  expect(boxes.some(n => text(n).startsWith(' · fb'))).toBe(false)
+})
+
+test('without a weekly figure the Fable one stands alone with its reset', async ($, on) => {
+  const w = world(on)
+  withFable(w)
+  w.state.limits = false
+  await startSession($)
+  await w.clock.settle()
+  const drawn = await (await $.ui.mount(HINT)).drawn()
+  expect(text(drawn)).toBe(
+    '? for shortcuts● [Opus 5.5 ·high] · claudepeeker · ctx (1M) ▰▱▱▱▱ 12% · 120K · fb (3d12h) █░░ 20% [+30%]',
+  )
+})
+
+test('the Fable bar width follows fableWidth', { options: { fableWidth: '5', fableStyle: 'dots' } }, async ($, on) => {
+  const w = world(on)
+  withFable(w)
+  await startSession($)
+  await w.clock.settle()
+  const drawn = await (await $.ui.mount(HINT)).drawn()
+  expect(text(drawn)).toContain('· fb (3d12h) ●○○○○ 20% [+30%]')
 })

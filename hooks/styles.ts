@@ -95,6 +95,7 @@ export const BARS: readonly { id: BarId; label: string }[] = [
   { id: 'ctx', label: 'ctx' },
   { id: 'five', label: '5h' },
   { id: 'week', label: 'wk' },
+  { id: 'fable', label: 'fb' },
 ]
 
 export const DEFAULT_PREFS: Prefs = {
@@ -102,8 +103,9 @@ export const DEFAULT_PREFS: Prefs = {
     ctx: { style: 'parallelogram', width: 5 },
     five: { style: 'blocks', width: 5 },
     week: { style: 'blocks', width: 5 },
+    fable: { style: 'blocks', width: 3 },
   },
-  timeModes: { five: 'relative', week: 'relative' },
+  timeModes: { five: 'relative', week: 'relative', fable: 'relative' },
   motion: 'lively',
 }
 
@@ -149,8 +151,9 @@ export function normalizeSettings(options: Record<string, unknown>): Prefs {
       ctx: bar('ctx', 'ctxStyle', 'ctxWidth'),
       five: bar('five', 'fiveStyle', 'fiveWidth'),
       week: bar('week', 'weekStyle', 'weekWidth'),
+      fable: bar('fable', 'fableStyle', 'fableWidth'),
     },
-    timeModes: { five: time('fiveTime'), week: time('weekTime') },
+    timeModes: { five: time('fiveTime'), week: time('weekTime'), fable: time('fableTime') },
     motion: MOTIONS.find(m => m === options.motion) ?? DEFAULT_PREFS.motion,
   }
 }

@@ -1,11 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, RenderElement, RenderNode, Timer } from 'claude-code'
 
-import type { BarId, GitInfo, Motion, Prefs, TimeMode } from '../types'
+import type { BarId, FableWindow, GitInfo, Motion, Prefs, TimeMode, WindowId } from '../types'
 import { encodeCells } from './cells'
 import type { Cell } from './cells'
 import { DEMO_END_MS, DEMO_TICK_MS, demoLine, isDemoChangeAt } from './demo'
-import { effortLabel, nextTimeMode, parseGitStatus, tone, windowFigures, wordForReason } from './format'
+import { effortLabel, nextTimeMode, parseGitStatus, readFableWindow, tone, windowFigures, wordForReason } from './format'
 import type { FinishWord } from './format'
 import { lineGroups } from './line'
 import type { LineData, PieceId, Segment, TurnView } from './line'
@@ -31,19 +31,25 @@ import { DEFAULT_PREFS, normalizeSettings } from './styles'
 
 const TICK_MS = 30_000
 const GIT_EVERY_MS = 10_000
+/** claude.ai's usage answer, the only place the Fable weekly limit is reported. */
+const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
+const FABLE_EVERY_MS = 300_000
+/** No two reads of the usage endpoint are closer than this, whatever asks. */
+const FABLE_MIN_GAP_MS = 60_000
 /** The plain line redraws this often while a turn runs, so the elapsed time ticks. */
 const ELAPSED_TICK_MS = 1000
 /** The Raster keys are this prefix and the piece id; never claudeticker's `row`. */
 const RASTER_PREFIX = 'peeker-'
 /** Fresh draws whose first blit was refused before the slot is drawn still. */
 const MAX_REFUSED_MOUNTS = 3
-const BAR_IDS: readonly BarId[] = ['ctx', 'five', 'week']
+const BAR_IDS: readonly BarId[] = ['ctx', 'five', 'week', 'fable']
 
 function isBarPiece(id: PieceId): id is BarId {
   return id !== 'dot' && id !== 'tail'
 }
 
 const git = atom({ plugin: 'claudepeeker', key: 'git' } as const, null)
+const fable = atom({ plugin: 'claudepeeker', key: 'fable' } as const, null)
 
 type Ui = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
 type Settings = { effortLevel?: unknown; modelSettings?: Record<string, { effortLevel?: unknown } | undefined> }
@@ -248,8 +254,11 @@ async function step($: EngineInterface): Promise<void> {
   }
 }
 
+/** How a reset time is named in the toast a failed save shows. */
+const TIME_LABELS: Record<WindowId, string> = { five: '5h', week: 'weekly', fable: 'Fable weekly' }
+
 /** Sets one reset time's format in the module variable and redraws the line. */
-function setTimeMode($: EngineInterface, id: 'five' | 'week', mode: TimeMode): void {
+function setTimeMode($: EngineInterface, id: WindowId, mode: TimeMode): void {
   settings = { ...settings, timeModes: { ...settings.timeModes, [id]: mode } }
   $.ui.invalidate('ui.render')
 }
@@ -258,14 +267,14 @@ function setTimeMode($: EngineInterface, id: 'five' | 'week', mode: TimeMode): v
  * A click on a reset time: the next format shows at once and is written to its /config row; the write
  * reloads the module, which then reads it from its options.
  */
-async function cycleTime($: EngineInterface, id: 'five' | 'week'): Promise<void> {
+async function cycleTime($: EngineInterface, id: WindowId): Promise<void> {
   if (isTimeWriting) return
   const before = settings.timeModes[id]
   const next = nextTimeMode(before)
   setTimeMode($, id, next)
   isTimeWriting = true
-  const key = id === 'five' ? 'claudepeeker.fiveTime' : 'claudepeeker.weekTime'
-  const label = id === 'five' ? '5h' : 'weekly'
+  const key = `claudepeeker.${id}Time`
+  const label = TIME_LABELS[id]
   try {
     const r = await $.config.set({ key, value: next })
     if (r.deny !== undefined) {
@@ -290,12 +299,13 @@ function turnView(now: number): TurnView | null {
 }
 
 async function lineData($: EngineInterface): Promise<LineData> {
-  const [usage, model, root, engineSettings, g, now] = await Promise.all([
+  const [usage, model, root, engineSettings, g, f, now] = await Promise.all([
     $.session.usage(),
     $.session.model(),
     $.session.root(),
     $.settings.read(),
     read($, git),
+    read($, fable),
     $.clock.now(),
   ])
   // What the main loop's last request sent wins over settings, for as long as the model and settings are those it was sent under.
@@ -319,6 +329,7 @@ async function lineData($: EngineInterface): Promise<LineData> {
         : null,
     five: windowFigures(usage.rateLimits.find(w => w.kind === 'five_hour'), 5, now),
     week: windowFigures(usage.rateLimits.find(w => w.kind === 'seven_day'), 168, now),
+    fable: windowFigures(f ?? undefined, 168, now),
     prefs: settings,
     now,
     offsetMin: -new Date(now).getTimezoneOffset(),
@@ -343,6 +354,41 @@ async function refreshGit($: EngineInterface): Promise<void> {
     if (now?.branch !== next?.branch || now?.mark !== next?.mark) await update($, git, () => next)
   } finally {
     isGitRunning = false
+  }
+}
+
+let isFableRunning = false
+let lastFableAt = -Infinity
+
+/**
+ * Reads the Fable weekly limit from claude.ai's usage endpoint with the session's own login and keeps it in the atom.
+ * A failed read leaves the value shown; a readable answer without a Fable row, or no bearer login, clears it.
+ */
+async function refreshFable($: EngineInterface): Promise<void> {
+  if (isFableRunning) return
+  isFableRunning = true
+  try {
+    const at = await $.clock.now()
+    if (at - lastFableAt < FABLE_MIN_GAP_MS) return
+    lastFableAt = at
+    let next: FableWindow | null = null
+    const auth = await $.session.authorize()
+    if (auth !== null && auth.kind === 'bearer') {
+      const r = await $.http.fetch(USAGE_URL, { auth: auth.handle, headers: { accept: 'application/json' } })
+      if (!r.ok) return
+      const parsed = readFableWindow(r.text)
+      if (parsed === null) return
+      next = parsed.window
+    }
+    const shown = await read($, fable)
+    if (shown?.percentUsed !== next?.percentUsed || shown?.resetsAt !== next?.resetsAt) {
+      await update($, fable, () => next)
+      $.ui.invalidate('ui.render')
+    }
+  } catch {
+    // An offline, refused or slow read leaves the figure as shown.
+  } finally {
+    isFableRunning = false
   }
 }
 
@@ -445,6 +491,8 @@ export const register: Register = (on, options) => {
   motion = createMotion()
   level = settings.motion
   isTimeWriting = false
+  isFableRunning = false
+  lastFableAt = -Infinity
   isBlitting = false
   site = null
   lastBlit.clear()
@@ -471,6 +519,8 @@ export const register: Register = (on, options) => {
     $.clock.every(TICK_MS, () => $.ui.invalidate('ui.render'))
     $.clock.every(GIT_EVERY_MS, () => void refreshGit($))
     void refreshGit($)
+    $.clock.every(FABLE_EVERY_MS, () => void refreshFable($))
+    void refreshFable($)
     // A start or a reload ends a demo (a /clear or a resume reaches the line through `session.end`).
     // The first values after a start are taken silently: a cleared context is not a compaction.
     endDemo($)
@@ -531,6 +581,7 @@ export const register: Register = (on, options) => {
     void refreshGit($)
     const result = await next(e)
     if (e.agentId === undefined) {
+      void refreshFable($)
       turn = null
       lastTurn = { word: wordForReason(e.reason), durationMs: e.durationMs, at: await $.clock.now() }
       $.ui.invalidate('ui.render')
@@ -584,6 +635,7 @@ export const register: Register = (on, options) => {
     if (data.ctx) readings.ctx = { percent: data.ctx.percent, resetsAtMs: null, tokens: data.ctx.tokens ?? null }
     if (data.five) readings.five = { percent: data.five.percent, resetsAtMs: data.five.resetsAtMs }
     if (data.week) readings.week = { percent: data.week.percent, resetsAtMs: data.week.resetsAtMs }
+    if (data.fable) readings.fable = { percent: data.fable.percent, resetsAtMs: data.fable.resetsAtMs }
     for (const id of BAR_IDS) {
       const reading = readings[id]
       if (reading) observe(motion, id, reading, data.prefs.bars[id], moving ?? 'off', primed)

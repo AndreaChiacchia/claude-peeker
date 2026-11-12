@@ -6,6 +6,7 @@ import {
   DEMO_TICK_MS,
   FIVE_AFTER_MS,
   FIVE_BEFORE_MS,
+  WEEK_MS,
   demoFrameAt,
   demoLine,
   demoTurnAt,
@@ -25,6 +26,7 @@ const data = (ctx: LineData['ctx']): LineData => ({
   ctx,
   five: null,
   week: null,
+  fable: null,
   prefs: DEFAULT_PREFS,
   now: STARTED,
   offsetMin: 0,
@@ -56,6 +58,13 @@ test('the demo replaces the three figures and nothing else', () => {
   expect(late.five).toEqual({ percent: 0, resetsAtMs: STARTED + FIVE_AFTER_MS, delta: null })
 
   expect(demoLine(data(null), 0, STARTED).ctx).toEqual({ window: 1_000_000, percent: 20, tokens: 200_000 })
+})
+
+test('the Fable bar takes part in the demo only when the real line has one', () => {
+  expect(demoLine(data(null), 0, STARTED).fable).toBeNull()
+  const real = { ...data(null), fable: { percent: 5, resetsAtMs: 1, delta: 3 } }
+  expect(demoLine(real, 0, STARTED).fable).toEqual({ percent: 12, resetsAtMs: STARTED + WEEK_MS, delta: null })
+  expect(demoLine(real, 7500, STARTED).fable?.percent).toBe(16)
 })
 
 test('the demo carries the tokens of the window and a scripted turn', () => {

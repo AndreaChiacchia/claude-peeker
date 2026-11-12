@@ -1,8 +1,8 @@
 // The status line as groups of colored segments, ported from statusline-command.js.
 
-import type { BarId, GitInfo, Prefs } from '../types'
+import type { BarId, GitInfo, Prefs, WindowId } from '../types'
 import { hex } from './cells'
-import { doneText, formatElapsed, formatTokens, modelLabel, resetLabel, tone } from './format'
+import { doneText, formatElapsed, formatTokens, isSameReset, modelLabel, resetLabel, tone } from './format'
 import type { FinishWord, Tone, WindowFigures } from './format'
 import { drawBar, styleOf, trackColorOf } from './styles'
 
@@ -16,7 +16,7 @@ export const TONES: Record<Tone, string> = { ok: '#5fff00', warn: '#ffd700', hot
 /** The working dot's lavender: the text twin of `cells.LIVE`. */
 export const LAVENDER = '#afafd7'
 
-/** The animated pieces of the line: the three bars, the state dot and the time at the end. */
+/** The animated pieces of the line: the bars, the state dot and the time at the end. */
 export type PieceId = BarId | 'dot' | 'tail'
 
 export type Segment = {
@@ -24,7 +24,7 @@ export type Segment = {
   color?: string
   bold?: boolean
   /** The reset time a press on this segment cycles. */
-  press?: 'five' | 'week'
+  press?: WindowId
   /** The animated piece this segment draws; such segments are drawn as one Raster when animated. */
   piece?: PieceId
 }
@@ -44,6 +44,8 @@ export type LineData = {
   ctx: { window: number; percent: number; tokens?: number | null } | null
   five: WindowFigures | null
   week: WindowFigures | null
+  /** Null without a Fable weekly window on the account. */
+  fable: WindowFigures | null
   prefs: Prefs
   now: number
   /** The local zone's offset east of UTC, in minutes. */
@@ -69,8 +71,8 @@ function bar(prefs: Prefs, id: BarId, percent: number, tokens?: number | null): 
     : [...cells, { text: ' ', piece: id }, figure, ...count]
 }
 
-function windowGroup(d: LineData, id: 'five' | 'week', label: string, f: WindowFigures): Segment[] {
-  const when = f.resetsAtMs === null ? '' : resetLabel(f.resetsAtMs, d.now, d.prefs.timeModes[id], d.offsetMin)
+function windowGroup(d: LineData, id: WindowId, label: string, f: WindowFigures, showTime = true): Segment[] {
+  const when = !showTime || f.resetsAtMs === null ? '' : resetLabel(f.resetsAtMs, d.now, d.prefs.timeModes[id], d.offsetMin)
   const group: Segment[] = [{ text: `${label} ` }]
   if (when) group.push({ text: `(${when})`, color: GRAY, press: id }, { text: ' ' })
   group.push(...bar(d.prefs, id, f.percent))
@@ -85,7 +87,7 @@ function windowGroup(d: LineData, id: 'five' | 'week', label: string, f: WindowF
   return group
 }
 
-/** The line's groups, joined by ` · ` when drawn. */
+/** The line's groups, joined by ` · ` when drawn. The Fable figure rides in the weekly group. */
 export function lineGroups(d: LineData): Segment[][] {
   const groups: Segment[][] = []
   const model: Segment[] = [
@@ -112,7 +114,18 @@ export function lineGroups(d: LineData): Segment[][] {
     ])
   }
   if (d.five) groups.push(windowGroup(d, 'five', '5h', d.five))
-  if (d.week) groups.push(windowGroup(d, 'week', 'wk', d.week))
+  if (d.week) {
+    const week = windowGroup(d, 'week', 'wk', d.week)
+    if (d.fable) {
+      week.push(
+        { text: ' · ' },
+        ...windowGroup(d, 'fable', 'fb', d.fable, !isSameReset(d.fable.resetsAtMs, d.week.resetsAtMs)),
+      )
+    }
+    groups.push(week)
+  } else if (d.fable) {
+    groups.push(windowGroup(d, 'fable', 'fb', d.fable))
+  }
   const turn = d.turn
   if (turn !== null) {
     if (turn.state === 'working') groups.push([{ text: formatElapsed(turn.elapsedMs), piece: 'tail' }])

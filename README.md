@@ -19,9 +19,9 @@ A mod for the Claude Code CLI that replaces a `statusLine` script with a status 
 - **Turn time:** ticks while a turn runs. When the turn ends it shows `✦ done · 6m24s` (or `✗ stopped`, `✗ failed`) for 2 seconds, then the time of the last turn stays in gray until the next turn starts.
 - **Git state:** a red `*` after the branch for uncommitted changes, a yellow one for commits not yet pushed.
 - **Context window:** the window size, how full it is and the tokens in it (`29% · 290K`), the count rolling to new values.
-- **Rate limits:** the 5-hour and weekly windows, each with a bar, the time until reset and a pace delta. The delta reads `[+n%]` when you're under an even burn rate and `[-n%]` when you're over it, and is hidden under 5 points.
-- **Clickable reset times:** a click cycles `2h13m` → `13:50` → `10/10 13:50` and saves the choice in `/config` (settings `fiveTime`, `weekTime`), so each window keeps its own format. A reset that isn't today shows its weekday (`Fri 05:00`). A click reloads the mod, so a running turn's timer restarts at the next turn.
-- **Bar styles** (settings `ctxStyle`, `fiveStyle`, `weekStyle`, and `ctxWidth`, `fiveWidth`, `weekWidth`): 17 styles, claudeticker's 14 meter styles with the same names and glyphs (claudecharter's heavy among them) plus pie, spark and none.
+- **Rate limits:** the 5-hour and weekly windows, each with a bar, the time until reset and a pace delta. The delta reads `[+n%]` when you're under an even burn rate and `[-n%]` when you're over it, and is hidden under 5 points. When the account has a Fable weekly limit, its figure follows the weekly one in the same group, with its own bar and pace delta: `wk (6d17h) █░░░░ 1% · fb █░░ 20% [-16%]`. Its reset time shows (`fb (3d12h) …`) only when it differs from the weekly reset by more than 10 minutes.
+- **Clickable reset times:** a click cycles `2h13m` → `13:50` → `10/10 13:50` and saves the choice in `/config` (settings `fiveTime`, `weekTime`, `fableTime`), so each window keeps its own format. The Fable reset time can be clicked while it shows. A reset that isn't today shows its weekday (`Fri 05:00`). A click reloads the mod, so a running turn's timer restarts at the next turn.
+- **Bar styles** (settings `ctxStyle`, `fiveStyle`, `weekStyle`, `fableStyle`, and `ctxWidth`, `fiveWidth`, `weekWidth`, `fableWidth`): 17 styles, claudeticker's 14 meter styles with the same names and glyphs (claudecharter's heavy among them) plus pie, spark and none.
 - **Colors follow the fill:** green below 50%, yellow from 50%, red from 80%.
 - **Motion:** the bars glint when they change. A warm sweep runs left to right when usage rises; an icy sweep runs right to left when it falls, and the emptied cells fade. The fill grows smoothly and blends its color, and the percent rolls to its new value with the changed digits flashing. Crossing 50% or 80% pulses the bar. A compaction drains the ctx bar with sparkles and shows `↻ −62%` for a moment. A 5h or weekly reset flashes the bar green with `✦ fresh`. A 5h or weekly bar that appears after the first draw fills in from empty. The bars also move after every model response, not only at the end of a turn. Pick lively (default), subtle or off with the `motion` setting.
 - **Matches claudespotter:** the same dot, token count and time as its subagent rows.
@@ -57,7 +57,7 @@ The demo uses your Motion setting (with off the figures change without effects) 
 
 ## Settings
 
-Set them in `/config`, or in settings under `pluginConfigs.claudepeeker`. A change applies at once. A click on a reset time changes `fiveTime` or `weekTime` the same way.
+Set them in `/config`, or in settings under `pluginConfigs.claudepeeker`. A change applies at once. A click on a reset time changes `fiveTime`, `weekTime` or `fableTime` the same way.
 
 | Setting | Values (default first) | Example |
 |---|---|---|
@@ -67,13 +67,17 @@ Set them in `/config`, or in settings under `pluginConfigs.claudepeeker`. A chan
 | `fiveWidth` | `5`, `3`, `4`, `6`, `8`, `10`, `12`, `15`, `20` | how many cells the 5-hour bar takes |
 | `weekStyle` | `blocks`, `parallelogram`, `shade`, `solid`, `smooth`, `smooth-bare`, `line`, `heavy`, `dots`, `squares`, `diamonds`, `braille`, `ascii`, `arrow`, `pie`, `spark`, `none` | the weekly bar's look: `█░░░░` / `●●○○○` / `◔` |
 | `weekWidth` | `5`, `3`, `4`, `6`, `8`, `10`, `12`, `15`, `20` | how many cells the weekly bar takes |
+| `fableStyle` | `blocks`, `parallelogram`, `shade`, `solid`, `smooth`, `smooth-bare`, `line`, `heavy`, `dots`, `squares`, `diamonds`, `braille`, `ascii`, `arrow`, `pie`, `spark`, `none` | the Fable weekly bar's look: `█░░` / `●○○` / `◔` |
+| `fableWidth` | `3`, `4`, `5`, `6`, `8`, `10`, `12`, `15`, `20` | how many cells the Fable weekly bar takes |
 | `fiveTime` | `relative`, `clock`, `date` | the 5-hour reset time: `2h13m` / `13:50` / `10/10 13:50` |
 | `weekTime` | `relative`, `clock`, `date` | the weekly reset time: `6d17h` / `Fri 05:00` / `17/10 05:00` |
+| `fableTime` | `relative`, `clock`, `date` | the Fable weekly reset time, shown only when it differs from the weekly one: `6d17h` / `Fri 05:00` / `17/10 05:00` |
 | `motion` | `lively`, `subtle`, `off` | glints, growth and rolling figures / the same, softer / a still line |
 
 ## How it works
 
 - **Figures:** context and rate limits come from `$.session.usage()`. These are the same readings a `statusLine` script gets on stdin as `context_window` and `rate_limits`. The tokens come from `context.tokens` in the same reading. The line redraws after every model response and every 30 seconds.
+- **Fable figure:** `$.session.usage()` has no Fable window, so the Fable weekly figure comes from claude.ai's usage endpoint (`/api/oauth/usage`), read with the session's own login at the start, every 5 minutes and after each turn (at most once a minute). A failed read leaves the figure as shown.
 - **Turn time:** counted from the `turn.start` of the main loop to its `turn.complete`. Subagent turns don't count.
 - **Painting:** the dot, the bars and the time are small cell grids repainted in place 20 times a second while an effect plays, and 4 times a second while a turn runs with only the dot and the time moving. Nothing is repainted while the line is idle. Off draws the plain line, which redraws once a second while a turn runs.
 - **Effort:** read from each request the main session sends (`turn.step`), so it is what the model actually runs on. Before the first request, and after a `/model` or `/effort` change until the next request, it comes from settings: the model's own `modelSettings.<model>.effortLevel` first, then `effortLevel`, which is what `/effort` saves.
@@ -83,6 +87,7 @@ Set them in `/config`, or in settings under `pluginConfigs.claudepeeker`. A chan
 ## Limitations
 
 - **Under the hint line.** The mod API has no hook into the row a `statusLine` script draws in. The mod keeps Claude Code's hint line (`? for shortcuts`, the mode pill) as it is and draws the status line on the row beneath it. Rows another mod adds under the hint line go below the status line.
+- **The Fable bar needs a claude.ai login.** It is hidden when the account has no Fable weekly limit, with an API key, and while `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set. The endpoint is internal to Claude Code and may change.
 - **Two states only.** The dot shows working or idle; the mod API has no reliable signal for the main session waiting on a permission prompt.
 
 ## Development
